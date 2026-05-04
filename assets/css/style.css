@@ -108,31 +108,39 @@ body {
     display: flex;
     align-items: center;
     width: 100%;
-    gap: 0;
+    gap: 8px;
 }
 
-/* Left zone: kiosk-only buttons (exit, refresh) — empty on normal browser */
+/* Kiosk-only buttons (exit, refresh) — empty/absent on normal browser */
 .header-left {
-    flex: 1 1 0;
+    flex: 0 0 auto;
     display: flex;
     align-items: center;
     gap: 6px;
+}
+
+/* Title wrap — fills available space, left-aligned */
+.header-title-wrap {
+    flex: 1 1 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
     min-width: 0;
+    overflow: hidden;
 }
 
 .header-title {
-    flex: 0 1 auto;
     font-size: 1.3rem;
     font-weight: 700;
     cursor: pointer;
     display: flex;
     align-items: baseline;
-    gap: 6px;
+    gap: 5px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     pointer-events: auto;
-    text-align: center;
+    flex-shrink: 1;
 }
 
 .header-version {
@@ -142,105 +150,118 @@ body {
     letter-spacing: 0.03em;
 }
 
-/* Update available indicator — replaces title content, same absolute centering */
-.header-update-pill {
+/* Update badge — shown beside title, title stays intact */
+.header-update-badge {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
+    gap: 5px;
+    background: rgba(251,191,36,0.15);
+    border: 1px solid rgba(251,191,36,0.45);
+    border-radius: 20px;
+    padding: 2px 6px 2px 5px;
+    white-space: nowrap;
+    flex-shrink: 0;
     animation: header-update-pulse 2s ease-in-out infinite;
 }
-.header-update-pill span {
-    font-size: 0.85rem;
+.header-update-badge-label {
+    font-size: 0.7rem;
     font-weight: 600;
-    opacity: 0.95;
-    white-space: nowrap;
+    color: #fde68a;
 }
 .header-update-btn {
     background: #fbbf24;
     color: #1e293b;
     border: none;
     border-radius: 20px;
-    padding: 3px 12px;
-    font-size: 0.78rem;
+    padding: 2px 9px;
+    font-size: 0.7rem;
     font-weight: 800;
     cursor: pointer;
     letter-spacing: 0.02em;
-    flex-shrink: 0;
     transition: background 0.15s, transform 0.1s;
 }
 .header-update-btn:active {
     background: #f59e0b;
     transform: scale(0.96);
 }
+.header-update-close {
+    background: none;
+    border: none;
+    color: rgba(255,255,255,0.5);
+    font-size: 0.8rem;
+    cursor: pointer;
+    padding: 0;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+}
 @keyframes header-update-pulse {
     0%, 100% { opacity: 1; }
     50%       { opacity: 0.7; }
 }
 
-.header-btn {
-    background: rgba(255,255,255,0.2);
-    border: none;
-    color: white;
-    font-size: 1.3rem;
-    width: 40px;
-    height: 40px;
-    border-radius: 50%;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: background 0.2s;
-}
-
-.header-btn:active {
-    background: rgba(255,255,255,0.4);
-}
-
-.header-scan-btn {
-    background: rgba(255,255,255,0.25);
-    border: 2px solid rgba(255,255,255,0.5);
-    color: white;
-    font-size: 2.1rem;
-    width: 58px;
-    height: 58px;
-    border-radius: 50%;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.2s;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-    animation: pulse-scan 2s ease-in-out infinite;
-    line-height: 1;
-    padding-bottom: 2px;
-}
-
+/* Actions — fixed-width, no stretching */
 .header-actions {
-    flex: 1 1 0;
+    flex: 0 0 auto;
     display: flex;
-    gap: 10px;
+    gap: 8px;
     align-items: center;
-    justify-content: flex-end;
-    min-width: 0;
 }
 
-/* ── Smart Scale status indicator in header ─────────────────────────── */
-.scale-status-indicator {
-    width: 22px;
-    height: 22px;
+/* ── Base header button — all action icons use this ─────────────────── */
+.header-btn {
+    background: rgba(255,255,255,0.18);
+    border: 1.5px solid rgba(255,255,255,0.28);
+    color: white;
+    font-size: 1.25rem;
+    width: 42px;
+    height: 42px;
     border-radius: 50%;
-    display: inline-flex;
+    cursor: pointer;
+    display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 13px;
-    cursor: default;
-    border: 2px solid rgba(255,255,255,0.3);
-    transition: background 0.4s, box-shadow 0.4s;
+    transition: background 0.2s, border-color 0.2s;
+    flex-shrink: 0;
+    -webkit-tap-highlight-color: transparent;
 }
-.scale-status-connected    { background: #22c55e; box-shadow: 0 0 6px #22c55eaa; }
-.scale-status-searching    { background: #f59e0b; animation: scaleStatusPulse 1.4s infinite; }
-.scale-status-disconnected { background: rgba(255,255,255,0.18); }
-.scale-status-error        { background: #ef4444; box-shadow: 0 0 4px #ef4444aa; }
+.header-btn:active {
+    background: rgba(255,255,255,0.38);
+}
+
+/* Scan button — slightly larger + pulse to draw attention */
+.header-scan-btn {
+    background: rgba(255,255,255,0.28);
+    border: 2px solid rgba(255,255,255,0.6);
+    font-size: 1.35rem;
+    width: 48px;
+    height: 48px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+    animation: pulse-scan 2s ease-in-out infinite;
+}
+.header-scan-btn:active {
+    background: rgba(255,255,255,0.45);
+    transform: scale(0.93);
+}
+
+/* ── Smart Scale status indicator ───────────────────────────────────── */
+/* Same shape as .header-btn but non-interactive — shows colored dot */
+.scale-status-indicator {
+    cursor: default;
+    pointer-events: none;
+}
+.scale-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.3);
+    transition: background 0.4s, box-shadow 0.4s;
+    flex-shrink: 0;
+}
+.scale-status-connected    .scale-dot { background: #22c55e; box-shadow: 0 0 6px #22c55eaa; }
+.scale-status-searching    .scale-dot { background: #f59e0b; animation: scaleStatusPulse 1.4s infinite; }
+.scale-status-disconnected .scale-dot { background: rgba(255,255,255,0.25); }
+.scale-status-error        .scale-dot { background: #ef4444; box-shadow: 0 0 4px #ef4444aa; }
 @keyframes scaleStatusPulse {
     0%, 100% { box-shadow: 0 0 4px #f59e0b88; }
     50%       { box-shadow: 0 0 10px #f59e0bcc; }
@@ -270,26 +291,19 @@ body {
     padding: 12px 0;
 }
 
+/* Gemini button — indigo tint */
 .header-gemini-btn {
-    width: 44px;
-    height: 44px;
-    font-size: 1.4rem;
-    animation: none;
-    border-width: 2px;
-    background: rgba(99, 102, 241, 0.35);
-    border-color: rgba(199, 210, 254, 0.6);
+    background: rgba(99,102,241,0.32);
+    border-color: rgba(199,210,254,0.55);
 }
-
 .header-gemini-btn:active {
-    background: rgba(99, 102, 241, 0.55);
+    background: rgba(99,102,241,0.55);
 }
-
-/* When Gemini API key is not configured */
 .header-gemini-btn.header-btn-no-ai {
     opacity: 0.45;
     filter: grayscale(0.7);
-    border-color: rgba(255, 255, 255, 0.25);
-    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255,255,255,0.22);
+    background: rgba(255,255,255,0.1);
     position: relative;
 }
 .header-gemini-btn.header-btn-no-ai::after {
@@ -308,10 +322,7 @@ body {
     filter: drop-shadow(0 1px 2px rgba(0,0,0,0.2));
 }
 
-.header-scan-btn:active {
-    transform: scale(0.9);
-    background: rgba(255,255,255,0.4);
-}
+/* (scan active is defined above in .header-scan-btn:active) */
 
 /* Spesa mode banner */
 .spesa-mode-banner {

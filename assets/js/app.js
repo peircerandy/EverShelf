@@ -160,35 +160,32 @@ function _checkWebappUpdate() {
 
             if (!deployChanged && !releaseNewer) return;
 
-            // ── Show update indicator inside the header title area ──
-            const titleEl = document.querySelector('.header-title');
-            if (!titleEl) return;
-            const originalHTML = titleEl.innerHTML;
+            // ── Show update badge alongside the title (title stays intact) ──
+            const badge = document.getElementById('header-update-badge');
+            if (!badge) return;
 
             const versionLabel = deployChanged
                 ? (serverVer ? `v${serverVer}` : 'Nuova versione')
                 : (latestTag ? `v${latestTag}` : 'Nuova versione');
 
-            let dismissAction;
-            if (deployChanged) {
-                dismissAction = () => { titleEl.innerHTML = originalHTML; };
-            } else {
-                dismissAction = () => { localStorage.setItem(SEEN_KEY, publishedAt); titleEl.innerHTML = originalHTML; };
-            }
+            const hideBadge = () => {
+                badge.style.display = 'none';
+                badge.innerHTML = '';
+                if (!deployChanged) localStorage.setItem(SEEN_KEY, publishedAt);
+            };
 
-            titleEl.innerHTML =
-                `<span class="header-update-pill" id="_header_update_pill">` +
-                `<span>⬆️ ${versionLabel}</span>` +
+            badge.innerHTML =
+                `<span class="header-update-badge-label">⬆️ ${versionLabel}</span>` +
                 `<button class="header-update-btn" onclick="window.location.reload()">Aggiorna</button>` +
-                `<button style="background:none;border:none;color:rgba(255,255,255,0.6);font-size:1rem;cursor:pointer;padding:0 2px;line-height:1" ` +
-                `id="_header_update_close">✕</button>` +
-                `</span>`;
+                `<button class="header-update-close" id="_header_update_close">✕</button>`;
+            badge.style.display = 'inline-flex';
+
             document.getElementById('_header_update_close').onclick = (e) => {
                 e.stopPropagation();
-                dismissAction();
+                hideBadge();
             };
-            // Auto-restore after 60 s without marking as seen
-            setTimeout(() => { if (document.getElementById('_header_update_pill')) dismissAction(); }, 60000);
+            // Auto-hide after 60 s without marking as seen
+            setTimeout(() => { if (badge.style.display !== 'none') hideBadge(); }, 60000);
         })
         .catch(() => {});
 }
@@ -795,7 +792,7 @@ function _startScaleAutoConfirm(onConfirm, btnId) {
 function _scaleUpdateStatus(state) {
     const el = document.getElementById('scale-status-indicator');
     if (!el) return;
-    el.className = `scale-status-indicator scale-status-${state}`;
+    el.className = `header-btn scale-status-indicator scale-status-${state}`;
     const labels = {
         connected:    `⚖️ ${t('scale.status_connected')}${_scaleDevice ? ': ' + _scaleDevice : ''}`,
         searching:    `⚖️ ${t('scale.status_searching')}`,
