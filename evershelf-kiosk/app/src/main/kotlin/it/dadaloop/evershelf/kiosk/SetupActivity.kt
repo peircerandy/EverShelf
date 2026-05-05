@@ -128,6 +128,7 @@ class SetupActivity : AppCompatActivity() {
         private const val INSTALL_CONFIRM_REQUEST = 2002
         private const val UNINSTALL_REQUEST       = 2003
         private const val PERMISSION_REQUEST_CODE = 2004
+        private const val INSTALL_FALLBACK_REQUEST = 2005
 
         fun applyLocale(base: Context, lang: String): Context {
             val locale = Locale(lang)
@@ -909,28 +910,37 @@ class SetupActivity : AppCompatActivity() {
                             unregisterReceiver(this)
                             runOnUiThread { checkGatewayStatus() }
                         }
+                        android.content.pm.PackageInstaller.STATUS_FAILURE -> {
+                            // Generic failure (status=1): PackageInstaller can't install on this
+                            // device/config. Fall back to system Intent.ACTION_VIEW installer UI.
+                            unregisterReceiver(this)
+                            ErrorReporter.reportMessage(
+                                "install_failure",
+                                "PackageInstaller STATUS_FAILURE=1, trying ACTION_VIEW fallback",
+                                mapOf(
+                                    "pkg"     to targetPkg,
+                                    "apk_kb"  to (file.length() / 1024),
+                                    "android" to Build.VERSION.SDK_INT,
+                                    "device"  to buildDeviceLabel()
+                                ),
+                                forceReport = true
+                            )
+                            runOnUiThread { tryFallbackInstall(file, targetPkg) }
+                        }
                         else -> {
                             unregisterReceiver(this)
                             val msg = intent?.getStringExtra(
                                 android.content.pm.PackageInstaller.EXTRA_STATUS_MESSAGE
                             ) ?: ""
-                            val deviceLabel = buildString {
-                                val mfr = Build.MANUFACTURER.takeIf { it.isNotBlank() && it != "unknown" }
-                                    ?: Build.PRODUCT.takeIf { it.isNotBlank() && it != "unknown" }
-                                    ?: Build.BOARD
-                                val model = Build.MODEL.takeIf { it.isNotBlank() && it != "unknown" }
-                                    ?: Build.HARDWARE
-                                append("$mfr $model")
-                            }
+                            val deviceLabel = buildDeviceLabel()
                             val hint = when (status) {
-                                1    -> "APK incompatibile con questo dispositivo o versione Android"
                                 2    -> "Bloccato da policy o da un'altra installazione in corso"
                                 3    -> "Annullato"
                                 4    -> "APK non valido o corrotto"
                                 5    -> "Conflitto: versione precedente con firma diversa"
                                 6    -> "Spazio insufficiente"
                                 7    -> "Incompatibile con questa versione di Android"
-                                else -> "Errore sconosciuto"
+                                else -> "Errore sconosciuto (status=$status)"
                             }
                             val diagInfo = buildString {
                                 appendLine("❌ Status $status: $hint")
@@ -1101,6 +1111,63 @@ class SetupActivity : AppCompatActivity() {
                     Handler(Looper.getMainLooper()).postDelayed({ installWithPackageInstaller(f, pkg) }, 600)
                 }
             }
+            INSTALL_FALLBACK_REQUEST -> {
+                // System package installer returned — check if the package is now installed
+                Handler(Looper.getMainLooper()).postDelayed({
+                    val installed = try { packageManager.getPackageInfo(pendingInstallPkg, 0); true } catch (_: Exception) { false }
+                    if (installed) {
+                        setGatewayUI("✅", getString(R.string.install_success),
+                            getString(R.string.install_success_detail), 0xFF34d399.toInt(), btnEnabled = false)
+                        Handler(Looper.getMainLooper()).postDelayed({ checkGatewayStatus() }, 1500)
+                    } else {
+                        checkGatewayStatus()
+                    }
+                }, 800)
+            }
         }
+    }
+
+    private fun tryFallbackInstall(file: java.io.File, targetPkg: String) {
+        try {
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                this, "$packageName.provider", file
+            )
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            pendingInstallFile = file
+            pendingInstallPkg  = targetPkg
+            setGatewayUI("⏳", getString(R.string.install_installing),
+                "Conferma l'installazione nella finestra di sistema...",
+                0xFF94a3b8.toInt(), btnEnabled = false, progress = -1)
+            @Suppress("DEPRECATION")
+            startActivityForResult(intent, INSTALL_FALLBACK_REQUEST)
+        } catch (e: Exception) {
+            val deviceLabel = buildDeviceLabel()
+            val diagInfo = buildString {
+                appendLine("❌ PackageInstaller status=1 e fallback non riuscito")
+                appendLine("Errore: ${e.message}")
+                appendLine("Android: ${Build.VERSION.SDK_INT} (${Build.VERSION.RELEASE})")
+                appendLine("Dispositivo: $deviceLabel")
+            }
+            setGatewayUI("❌", getString(R.string.install_error_install),
+                diagInfo.trim(), 0xFFf87171.toInt())
+            ErrorReporter.reportMessage(
+                "install_fallback_exception",
+                "tryFallbackInstall failed: ${e.message}",
+                mapOf("android" to Build.VERSION.SDK_INT, "device" to deviceLabel),
+                forceReport = true
+            )
+        }
+    }
+
+    private fun buildDeviceLabel(): String {
+        val mfr   = Build.MANUFACTURER.takeIf { it.isNotBlank() && it != "unknown" }
+            ?: Build.PRODUCT.takeIf { it.isNotBlank() && it != "unknown" }
+            ?: Build.BOARD
+        val model = Build.MODEL.takeIf { it.isNotBlank() && it != "unknown" }
+            ?: Build.HARDWARE
+        return "$mfr $model"
     }
 }

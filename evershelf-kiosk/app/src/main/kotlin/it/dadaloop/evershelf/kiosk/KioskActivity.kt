@@ -99,7 +99,7 @@ class KioskActivity : AppCompatActivity() {
         private const val KEY_SCREENSAVER = "screensaver_enabled"
         private const val GATEWAY_PACKAGE = "it.dadaloop.evershelf.scalegate"
         private const val GATEWAY_DOWNLOAD_URL = "https://github.com/dadaloop82/EverShelf/releases/latest/download/evershelf-scale-gateway.apk"
-        private const val KIOSK_DOWNLOAD_URL = "https://github.com/dadaloop82/EverShelf/releases/latest/download/evershelf-kiosk.apk"
+        private const val KIOSK_DOWNLOAD_URL = "https://github.com/dadaloop82/EverShelf/releases/download/kiosk-latest/evershelf-kiosk.apk"
         private const val SPLASH_DURATION = 1500L
         private const val GITHUB_RELEASES_API = "https://api.github.com/repos/dadaloop82/EverShelf/releases/latest"
     }
