@@ -2025,11 +2025,13 @@ async function loadSettingsUI() {
 // Only shown when _kioskBridge JS interface is available (Android WebView).
 function _injectKioskOverlay() {
     if (typeof _kioskBridge === 'undefined') return;
-    if (document.getElementById('_kiosk_overlay')) return;
 
-    // Mark header so CSS can center the title
+    // Always mark header as kiosk-mode (idempotent) — must happen even if buttons
+    // were already injected by the native onPageFinished Kotlin callback.
     const appHeader = document.querySelector('.app-header');
     if (appHeader) appHeader.classList.add('kiosk-mode');
+
+    if (document.getElementById('_kiosk_overlay')) return;
 
     const headerLeft = document.getElementById('header-left');
     if (!headerLeft) return;
@@ -6869,7 +6871,7 @@ function selectUseLocation(btn, loc) {
 // After 3+ consistent choices from the same location for a product,
 // auto-selects it and hides the location picker (user can still tap "cambia").
 const _PREF_LOC_KEY = '_prefUseLoc';
-const _PREF_LOC_NEEDED = 3; // choices needed to confirm a preference
+const _PREF_LOC_NEEDED = 2; // choices needed to confirm a preference
 
 function _getPrefLocHistory(productId) {
     try {
