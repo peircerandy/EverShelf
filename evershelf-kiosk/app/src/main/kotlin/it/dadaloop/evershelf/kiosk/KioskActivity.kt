@@ -538,10 +538,11 @@ class KioskActivity : AppCompatActivity() {
     private fun showNativeUpdateBanner(message: String, apkDownloadUrl: String) {
         pendingApkDownloadUrl = apkDownloadUrl
         tvUpdateMessage.text = "⬆️ Aggiornamento disponibile:  $message"
+        // Reset button to initial state so user can confirm before download starts
+        btnInstallUpdate.isEnabled = true
+        btnInstallUpdate.text = "⬇ Scarica"
         updateBanner.visibility = View.VISIBLE
-        // Auto-start download immediately — no timer hide, stays until done or dismissed
-        activeInstallBtn = btnInstallUpdate
-        triggerApkDownload(apkDownloadUrl)
+        // Download starts only when the user taps btnInstallUpdate
     }
 
     // ── APK Download + Install ─────────────────────────────────────────────
