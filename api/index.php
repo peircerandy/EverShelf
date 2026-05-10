@@ -2844,6 +2844,7 @@ REGOLE:
 7. Puoi suggerire combinazioni creative
 8. Quando menzioni quantità, usa le stesse unità di misura della dispensa
 9. Ricorda il contesto della conversazione precedente
+10. Se l'utente chiede esplicitamente una ricetta per un apparecchio specifico (es. macchina del pane, Cookeo, friggitrice ad aria), fornisci la ricetta SOLO per quell'apparecchio, con istruzioni specifiche per quel dispositivo (programmi, ordine degli ingredienti, tempi, temperature)
 PROMPT;
 
     // Build conversation for Gemini
@@ -4274,6 +4275,7 @@ function _buildAppliancesPrompt(array $appliances, bool $compact = false): strin
         'cookeo', 'bimby', 'thermomix', 'monsieur cuisine',
         'bimby tm', 'vorwerk', 'instant pot', 'multicooker',
         'robot da cucina', 'robot cucina',
+        'macchina del pane', 'bread machine',
     ];
 
     $detectedMulti = [];
@@ -4306,6 +4308,8 @@ function _buildAppliancesPrompt(array $appliances, bool $compact = false): strin
         'multicooker'      => 'rosolare, cuocere a pressione, stufare, vapore, slow cook',
         'robot da cucina'  => 'tritare, frullare, cuocere, mescolare, impastare',
         'robot cucina'     => 'tritare, frullare, cuocere, mescolare, impastare',
+        'macchina del pane'=> 'impastare, lievitare, cuocere pane (ordine ingredienti: liquidi → farina → sale → zucchero → lievito in cima; scegliere programma: Base, Integrale, Francese, Rapido, Dolce, Solo impasto)',
+        'bread machine'    => 'impastare, lievitare, cuocere pane (ordine: liquidi → farina → sale → zucchero → lievito in cima)',
     ];
 
     $multiDetails = [];
@@ -4324,7 +4328,15 @@ function _buildAppliancesPrompt(array $appliances, bool $compact = false): strin
     $othersStr = !empty($others) ? ', ' . implode(', ', $others) . ' (accessori di supporto se serve)' : '';
 
     if ($compact) {
-        return "\nElettrodomestici: {$allList}. PREFERISCI usare {$multiStr} per quanti più passaggi possibile.";
+        // When multiple specialized appliances are present, list each with capabilities.
+        // Do NOT force-prefer one over another — the user may explicitly ask for a specific one.
+        if (count($detectedMulti) === 1) {
+            $single = $multiDetails[0];
+            return "\nElettrodomestici: {$allList}. Se la ricetta lo consente, preferisci usare {$single} per quanti più passaggi possibile.";
+        }
+        // Multiple specialized appliances: describe each, let the user's request decide
+        $multiStr = implode('; ', $multiDetails);
+        return "\nElettrodomestici: {$allList}. Apparecchi specializzati disponibili: {$multiStr}. Usa quello più adatto alla ricetta richiesta dall'utente, rispettando sempre la sua preferenza esplicita.";
     }
 
     $ruleLines = implode("\n", array_map(fn($d) => "   → {$d}", $multiDetails));
