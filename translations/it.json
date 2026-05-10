@@ -193,7 +193,8 @@
         "use_qty_sub": "quanto ne hai usato",
         "throw_btn": "🗑️ BUTTA",
         "throw_sub": "butta il prodotto",
-        "edit_sub": "scadenza, luogo…"
+        "edit_sub": "scadenza, luogo…",
+        "create_recipe_btn": "Crea una ricetta con questo"
     },
     "add": {
         "title": "Aggiungi alla Dispensa",
@@ -477,6 +478,7 @@
         "transferred": "Aggiunta alle Ricette!",
         "open_recipe": "Apri la ricetta"
     },
+    "action": {
     "cooking": {
         "close": "Chiudi",
         "tts_btn": "Leggi ad alta voce",

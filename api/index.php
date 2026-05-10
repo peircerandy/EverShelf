@@ -111,7 +111,7 @@ function checkRateLimit(string $action): void {
     }
 
     // Determine limit based on action
-    $aiActions = ['gemini_readExpiry', 'gemini_chat', 'gemini_identify', 'gemini_suggest_shopping', 'chat_to_recipe'];
+    $aiActions = ['gemini_readExpiry', 'gemini_chat', 'gemini_identify', 'gemini_suggest_shopping', 'chat_to_recipe', 'recipe_from_ingredient'];
     $loginActions = [];
     $recipeActions = ['generate_recipe', 'generate_recipe_stream'];
     $errorActions = ['report_error', 'check_update'];
@@ -337,6 +337,10 @@ try {
 
         case 'chat_to_recipe':
             chatToRecipe($db);
+            break;
+
+        case 'recipe_from_ingredient':
+            recipeFromIngredient($db);
             break;
 
         // ===== BRING! SHOPPING LIST =====
@@ -3630,7 +3634,7 @@ Convert the recipe text below to a JSON object. Return ONLY the JSON, no markdow
 
 Fields:
 - title: string
-- meal: one of "colazione","pranzo","cena","dolce","succo" (infer from context, default "pranzo")
+- meal: null  (do NOT categorize — leave as null always)
 - persons: integer (number of servings/people, default 2 if not mentioned)
 - prep_time: string or null
 - cook_time: string or null
@@ -3681,6 +3685,91 @@ PROMPT;
     }
 
     // Enrich ingredients with product_id/location — same fuzzy-match as generateRecipe
+    if (!empty($recipe['ingredients'])) {
+        _enrichChatIngredients($recipe['ingredients'], $items);
+    }
+
+    echo json_encode(['success' => true, 'recipe' => $recipe]);
+}
+
+// ===== RECIPE FROM INGREDIENT =====
+function recipeFromIngredient(PDO $db): void {
+    $apiKey = env('GEMINI_API_KEY');
+    if (empty($apiKey)) {
+        echo json_encode(['success' => false, 'error' => 'no_api_key']);
+        return;
+    }
+
+    $input = json_decode(file_get_contents('php://input'), true);
+    $ingredientName = trim($input['ingredient'] ?? '');
+    if (empty($ingredientName)) {
+        echo json_encode(['success' => false, 'error' => 'empty_ingredient']);
+        return;
+    }
+
+    // Fetch inventory (same as generateRecipe)
+    $stmt = $db->query("
+        SELECT p.id AS product_id, p.name, p.brand, p.category, i.quantity, p.unit, p.default_quantity, p.package_unit, i.location, i.expiry_date, i.opened_at,
+               CASE WHEN i.expiry_date IS NOT NULL THEN julianday(i.expiry_date) - julianday('now') ELSE 999 END AS days_left
+        FROM inventory i
+        JOIN products p ON p.id = i.product_id
+        WHERE i.quantity > 0
+        ORDER BY days_left ASC
+    ");
+    $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    $safeName = htmlspecialchars($ingredientName, ENT_QUOTES, 'UTF-8');
+
+    $prompt = <<<PROMPT
+Generate a recipe in Italian that uses "{$safeName}" as a main ingredient.
+Return ONLY a JSON object, no markdown.
+
+Fields:
+- title: string (Italian recipe name)
+- meal: null  (do NOT categorize)
+- persons: 2
+- prep_time: string or null
+- cook_time: string or null
+- ingredients: array of {"name":"...","qty":"...","qty_number":0.0,"unit":"g|ml|pz|conf|kg|l","from_pantry":true}
+  — "{$safeName}" MUST be the first ingredient; set from_pantry=true for ALL
+- steps: array of strings (step text only, no numbers)
+- nutrition_note: string or null
+PROMPT;
+
+    $payload = [
+        'contents' => [['role' => 'user', 'parts' => [['text' => $prompt]]]],
+        'generationConfig' => ['temperature' => 0.7, 'maxOutputTokens' => 8192],
+    ];
+
+    $result = callGeminiWithFallback($apiKey, $payload, 45);
+
+    if ($result['http_code'] !== 200) {
+        echo json_encode(['success' => false, 'error' => $result['data']['error']['message'] ?? 'gemini_error']);
+        return;
+    }
+
+    $text = $result['data']['candidates'][0]['content']['parts'][0]['text'] ?? '';
+    if (empty($text)) {
+        echo json_encode(['success' => false, 'error' => 'gemini_error']);
+        return;
+    }
+
+    $text = preg_replace('/```(?:json)?\s*/i', '', $text);
+    $text = str_replace('```', '', $text);
+    $start = strpos($text, '{');
+    $end   = strrpos($text, '}');
+    if ($start === false || $end === false || $end <= $start) {
+        echo json_encode(['success' => false, 'error' => 'parse_error', 'raw' => mb_substr($text, 0, 500)]);
+        return;
+    }
+    $text = substr($text, $start, $end - $start + 1);
+
+    $recipe = json_decode($text, true);
+    if (!is_array($recipe) || empty($recipe['title'])) {
+        echo json_encode(['success' => false, 'error' => 'parse_error', 'raw' => mb_substr($text, 0, 500)]);
+        return;
+    }
+
     if (!empty($recipe['ingredients'])) {
         _enrichChatIngredients($recipe['ingredients'], $items);
     }

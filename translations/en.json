@@ -193,7 +193,8 @@
         "use_qty_sub": "how much you used",
         "throw_btn": "🗑️ DISCARD",
         "throw_sub": "throw away",
-        "edit_sub": "expiry, location…"
+        "edit_sub": "expiry, location…",
+        "create_recipe_btn": "Create a recipe with this"
     },
     "add": {
         "title": "Add to Pantry",
@@ -477,6 +478,7 @@
         "transferred": "Added to Recipes!",
         "open_recipe": "Open recipe"
     },
+    "action": {
     "cooking": {
         "close": "Close",
         "tts_btn": "Read aloud",
