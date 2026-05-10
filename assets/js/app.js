@@ -6009,6 +6009,9 @@ function showProductAction() {
                     <span class="btn-icon">✏️</span>
                     <span class="btn-text">${t('product.modify_details')}<br><small>${t('action.edit_sub')}</small></span>
                 </button>
+                <button class="btn btn-recipe-from-ingredient" onclick="generateRecipeForIngredient(${JSON.stringify(currentProduct.name)})">
+                    👨‍🍳 ${t('action.create_recipe_btn') || 'Crea una ricetta'}
+                </button>
             `;
             // Secondary: catalog edit link below the buttons (one instance only)
             let catalogLink = document.getElementById('catalog-edit-link');
@@ -11471,7 +11474,7 @@ function renderRecipe(r) {
 
     // Meta tags
     html += '<div class="recipe-meta">';
-    html += `<span class="recipe-tag">${_mealLabel(r.meal)}</span>`;
+    if (r.meal) html += `<span class="recipe-tag">${_mealLabel(r.meal)}</span>`;
     html += `<span class="recipe-tag">👥 ${r.persons} ${t('recipes.persons_short')}</span>`;
     if (r.prep_time) html += `<span class="recipe-tag">🔪 ${r.prep_time}</span>`;
     if (r.cook_time) html += `<span class="recipe-tag">🔥 ${r.cook_time}</span>`;
@@ -12447,27 +12450,52 @@ async function chatTransferToRecipes(btn, replyText) {
         if (!recipe.persons && recipe.servings) recipe.persons = recipe.servings;
         if (!recipe.persons) recipe.persons = 2;
         await saveRecipeToArchive(recipe);
-        _cachedRecipe = { meal: recipe.meal || 'pranzo', recipe };
+        _cachedRecipe = { meal: recipe.meal || '', recipe };
         renderRecipe(recipe);
-        btn.textContent = '✅ ' + (t('chat.transferred') || 'Aggiunta alle Ricette!');
-        btn.disabled = true;
-        // Add "Apri la ricetta" button next to the transfer button
-        const openBtn = document.createElement('button');
-        openBtn.className = 'btn-chat-use-recipe';
-        openBtn.style.marginLeft = '8px';
-        openBtn.textContent = '📖 ' + (t('chat.open_recipe') || 'Apri la ricetta');
-        openBtn.onclick = () => {
+        // Transform the transfer button into "Apri la ricetta"
+        btn.disabled = false;
+        btn.textContent = '📖 ' + (t('chat.open_recipe') || 'Apri la ricetta');
+        btn.onclick = () => {
             document.getElementById('recipe-overlay').style.display = 'flex';
             document.getElementById('recipe-ask').style.display = 'none';
             document.getElementById('recipe-loading').style.display = 'none';
             document.getElementById('recipe-result').style.display = '';
         };
-        btn.parentNode.insertBefore(openBtn, btn.nextSibling);
         showToast('✅ ' + (t('chat.transferred') || 'Aggiunta alle Ricette!'), 'success');
     } catch (err) {
         console.error('[chatTransferToRecipes]', err);
         resetBtn();
         showToast('⚠️ ' + (err.message || t('error.connection') || 'Errore di connessione'), 'error');
+    }
+}
+
+async function generateRecipeForIngredient(ingredientName) {
+    if (!_requireGemini()) return;
+    document.getElementById('recipe-overlay').style.display = 'flex';
+    document.getElementById('recipe-ask').style.display = 'none';
+    document.getElementById('recipe-loading').style.display = '';
+    document.getElementById('recipe-result').style.display = 'none';
+    const loadingMsg = document.getElementById('recipe-loading-msg');
+    if (loadingMsg) loadingMsg.textContent = '👨‍🍳 ' + (t('recipes.loading_msg') || 'Sto preparando la ricetta...');
+    try {
+        const result = await api('recipe_from_ingredient', {}, 'POST', { ingredient: ingredientName });
+        if (!result || !result.success || !result.recipe) {
+            document.getElementById('recipe-overlay').style.display = 'none';
+            showToast('⚠️ ' + (result?.error || t('error.generic') || 'Errore'), 'error');
+            return;
+        }
+        const recipe = result.recipe;
+        if (!recipe.persons && recipe.servings) recipe.persons = recipe.servings;
+        if (!recipe.persons) recipe.persons = 2;
+        await saveRecipeToArchive(recipe);
+        _cachedRecipe = { meal: recipe.meal || '', recipe };
+        renderRecipe(recipe);
+        document.getElementById('recipe-loading').style.display = 'none';
+        document.getElementById('recipe-result').style.display = '';
+    } catch (err) {
+        console.error('[generateRecipeForIngredient]', err);
+        document.getElementById('recipe-overlay').style.display = 'none';
+        showToast('⚠️ ' + (t('error.connection') || 'Errore di connessione'), 'error');
     }
 }
 

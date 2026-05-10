@@ -193,7 +193,8 @@
         "use_qty_sub": "wie viel verwendet",
         "throw_btn": "🗑️ ENTSORGEN",
         "throw_sub": "wegwerfen",
-        "edit_sub": "Ablauf, Ort…"
+        "edit_sub": "Ablauf, Ort…",
+        "create_recipe_btn": "Rezept damit erstellen"
     },
     "add": {
         "title": "Zum Vorrat hinzufügen",

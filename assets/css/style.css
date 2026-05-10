@@ -4991,6 +4991,27 @@ body.cooking-mode-active .app-header {
     background: #4f46e5;
 }
 
+.btn-recipe-from-ingredient {
+    grid-column: 1 / -1;
+    background: linear-gradient(135deg, #0f766e, #0d9488);
+    color: white;
+    border: none;
+    border-radius: 14px;
+    padding: 14px 20px;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+
+.btn-recipe-from-ingredient:active {
+    opacity: 0.85;
+}
+
 /* ===== STRUCTURED QUANTITY IN INVENTORY ===== */
 .inv-qty-col {
     display: flex;
