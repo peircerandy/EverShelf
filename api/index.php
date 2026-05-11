@@ -1892,7 +1892,7 @@ function getStats(PDO $db): void {
         SELECT i.*, p.name, p.brand, p.category, p.unit, p.default_quantity, p.package_unit,
                COALESCE(i.vacuum_sealed, 0) as vacuum_sealed
         FROM inventory i JOIN products p ON i.product_id = p.id 
-        WHERE i.expiry_date IS NOT NULL AND i.expiry_date < date('now')
+        WHERE i.expiry_date IS NOT NULL AND i.expiry_date < date('now') AND i.quantity > 0
         ORDER BY i.expiry_date ASC
     ")->fetchAll();
     
