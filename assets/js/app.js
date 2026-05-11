@@ -103,10 +103,10 @@ function _updateGeminiButtonState() {
     if (_geminiAvailable) {
         btn.classList.remove('header-btn-no-ai');
         btn.removeAttribute('title');
-        btn.setAttribute('title', 'Chat con Gemini');
+        btn.setAttribute('title', t('gemini.chat_title'));
     } else {
         btn.classList.add('header-btn-no-ai');
-        btn.setAttribute('title', '🤖 Gemini non configurato — imposta GEMINI_API_KEY nelle impostazioni');
+        btn.setAttribute('title', t('gemini.not_configured'));
     }
 }
 
@@ -168,8 +168,8 @@ function _checkWebappUpdate() {
             if (!badge) return;
 
             const versionLabel = deployChanged
-                ? (serverVer ? `v${serverVer}` : 'Nuova versione')
-                : (latestTag ? `v${latestTag}` : 'Nuova versione');
+                ? (serverVer ? `v${serverVer}` : t('update.new_version'))
+                : (latestTag ? `v${latestTag}` : t('update.new_version'));
 
             const hideBadge = () => {
                 badge.style.display = 'none';
@@ -179,7 +179,7 @@ function _checkWebappUpdate() {
 
             badge.innerHTML =
                 `<span class="header-update-badge-label">⬆️ ${versionLabel}</span>` +
-                `<button class="header-update-btn" onclick="window.location.reload()">Aggiorna</button>` +
+                `<button class="header-update-btn" onclick="window.location.reload()">${t('update.btn')}</button>` +
                 `<button class="header-update-close" id="_header_update_close">✕</button>`;
             badge.style.display = 'inline-flex';
 
@@ -624,8 +624,9 @@ function _scaleAutoFillRecipeUse(msg) {
         return;
     }
 
-    // Reject if weight hasn't changed enough from last confirmed reading
-    if (_scaleLastConfirmedGrams !== null && Math.abs(grams - _scaleLastConfirmedGrams) < 10) {
+    // Reject if weight hasn't changed enough from last confirmed reading.
+    // Threshold: 5g — gives enough time to tare after opening the modal.
+    if (_scaleLastConfirmedGrams !== null && Math.abs(grams - _scaleLastConfirmedGrams) < 5) {
         return;
     }
 
@@ -1214,15 +1215,14 @@ const URGENCY_BG = {
 // Map Open Food Facts categories to local categories
 function mapToLocalCategory(ofCategory, productName) {
     if (!ofCategory) {
-        // No category tag — try to guess from product name
         return guessCategoryFromName(productName || '');
     }
     const cat = ofCategory.toLowerCase();
-    // Direct match with our local keys
+    // Direct match with our local keys — but NOT 'altro': fall through to name guess
     for (const key of Object.keys(CATEGORY_ICONS)) {
-        if (cat === key) return key;
+        if (cat === key && key !== 'altro') return key;
     }
-    
+
     // Handle specific Open Food Facts tags FIRST (before generic regex)
     // "plant-based-foods-and-beverages" is a catch-all — use product name to decide
     if (/plant-based-foods/.test(cat)) {
@@ -1232,9 +1232,15 @@ function mapToLocalCategory(ofCategory, productName) {
     if (/^en:beverages/.test(cat)) return 'bevande';
     // sweeteners = condimenti
     if (/sweetener|dolcific/.test(cat)) return 'condimenti';
-    
+    // food-additives, cooking-helpers, flavourings = condimenti
+    if (/food-additive|cooking-helper|aromi|flavour/.test(cat)) return 'condimenti';
+    // breakfasts = cereali
+    if (/breakfast/.test(cat)) return 'cereali';
+    // dried-products = conserve
+    if (/dried-product/.test(cat)) return 'conserve';
+
     // Specific tag patterns
-    if (/dairy|lait|cheese|fromage|yoghurt|milk|latticin|latte|egg|uova|uovo|poultry-egg/.test(cat)) return 'latticini';
+    if (/dairi|dairy|lait|cheese|fromage|yoghurt|milk|latticin|latte\b|egg\b|uova\b|uovo\b|poultry-egg/.test(cat)) return 'latticini';
     if (/meat|viande|carne|sausage|salum|prosciutt/.test(cat)) return 'carne';
     if (/fish|poisson|pesce|seafood|tuna|tonno|salmone/.test(cat)) return 'pesce';
     if (/fruit|frutta|juice|succo|apple|banana/.test(cat)) return 'frutta';
@@ -1244,12 +1250,15 @@ function mapToLocalCategory(ofCategory, productName) {
     if (/frozen|surgelé|surgel|gelat/.test(cat)) return 'surgelati';
     if (/sauce|condiment|oil|olio|vinegar|aceto|mayo|ketchup|spice|salt|sugar|zuccher/.test(cat)) return 'condimenti';
     if (/snack|chip|crisp|chocolate|cioccolat|candy|biscuit|cookie|wafer|merendine|patatine/.test(cat)) return 'snack';
-    if (/conserve|canned|can|pelati|passata|preserve|jam|marmellat|miele|honey/.test(cat)) return 'conserve';
+    if (/preserve|jam|marmellat|miele|honey|canned|pelati|passata/.test(cat)) return 'conserve';
     if (/cereal|muesli|granola|oat|fiocchi/.test(cat)) return 'cereali';
     if (/hygiene|soap|shampoo|igien|dentifricio|deodorant/.test(cat)) return 'igiene';
     if (/clean|detergent|pulizia|detersiv/.test(cat)) return 'pulizia';
     // Beverage check LAST (to avoid false matches on compound tags)
     if (/^(?!.*plant-based).*(beverage|drink|boisson|bevand|water|acqua|beer|birra|wine|vino|coffee|caffè|tea\b)/.test(cat)) return 'bevande';
+    // Last resort: try product name before giving up
+    const nameGuess = guessCategoryFromName(productName || '');
+    if (nameGuess !== 'altro') return nameGuess;
     return 'altro';
 }
 
@@ -1257,36 +1266,47 @@ function mapToLocalCategory(ofCategory, productName) {
 function guessCategoryFromName(name) {
     if (!name) return 'altro';
     const n = name.toLowerCase();
+    // ── Known Italian brand names → direct category (fast-path before regex)
+    // "Uno" only if it starts the name (Bahlsen biscuits, not the Italian word)
+    if (/^uno\b/.test(n)) return 'snack';
+    const _brandRx = [
+        [/\b(baiocchi|macine|tarallucci|tegolini|pavesini|plasmon|loacker|manner|digestive|oreo|hanuta|ringo|abbracci|gocciole|pan di stelle|oro saiwa|kinder|ferrero rocher|raffaello|bounty|twix|snickers|pringles|fonzies|tuc\b|ritz\b|mulino bianco|gran cereale|gocciole|saiwa|togo|principe|oro ciok|kit ?kat)\b/, 'snack'],
+        [/\b(barilla|de cecco|garofalo|la molisana|rummo|voiello|divella|agnesi|buitoni)\b/, 'pasta'],
+        [/\b(galbani|granarolo|yomo|danone|muller|müller|pr[eé]sident|santa lucia|jocca|fiorfiore)\b/, 'latticini'],
+        [/\b(mutti|cirio)\b/, 'conserve'],
+        [/\b(san pellegrino|levissima|ferrarelle|lete|nestea|lipton|nescaf[eé]|lavazza|illy\b|kimbo|segafredo)\b/, 'bevande'],
+    ];
+    for (const [rx, cat] of _brandRx) { if (rx.test(n)) return cat; }
     // Pasta & Rice
-    if (/spaghetti|penne|fusilli|rigatoni|linguine|orecchiette|farfalle|pasta\b|riso\b|basmati|carnaroli|arborio|gnocchi|lasagne|tagliatelle|maccheroni|bucatini|pennette/.test(n)) return 'pasta';
+    if (/spaghetti|penne|fusilli|rigatoni|linguine|orecchiette|farfalle|pasta\b|riso\b|basmati|carnaroli|arborio|gnocchi|lasagne|tagliatelle|maccheroni|bucatini|pennette|sedani|tortiglioni|calamarata|spaghettini|vermicelli/.test(n)) return 'pasta';
     // Pane & Forno
-    if (/pane\b|fette biscottate|grissini|cracker|toast|piadina|piadelle|focaccia|panini|sandwich|taralli|pancarrè|baguette|ciabatta|rosetta|tramezzino|tortilla|pita\b/.test(n)) return 'pane';
+    if (/pane\b|bauletto|fette biscottate|grissini|cracker|toast|piadina|piadelle|focaccia|panini\b|sandwich|taralli|pancarr[eè]|baguette|ciabatta|rosetta|tramezzino|tortilla|pita\b|pangrattato|pane grattugiato|pan.*carr[eè]/.test(n)) return 'pane';
     // Latticini (before bevande to avoid latte→bevande)
-    if (/latte\b|yogurt|yaourt|formaggio|mozzarella|burro|panna|ricotta|mascarpone|gorgonzola|parmigiano|grana\b|uova\b|uovo\b|egg\b|burrata|scamorza|provolone|pecorino|fontina|taleggio|stracchino|crescenza|brie|camembert|emmental|asiago|feta\b|provola|caciotta|caprino/.test(n)) return 'latticini';
-    // Conserve
-    if (/passata|pelati|pomodoro|pomodori|pomodorini|ciliegino|sugo|polpa di pomod|marmellata|miele|legumi|ceci|fagioli|lenticchie|olive|tonno in scatola|sgombro in scatola|concentrato|brodo|dado|besciamella/.test(n)) return 'conserve';
-    // Condimenti (include spezie, farine, zucchero)
-    if (/olio\b|aceto|sale\b|pepe\b|zucchero|zuccher|farina|maionese|ketchup|senape|salsa|paprika|curry|cannella|noce moscata|origano|rosmarino|timo|basilico|prezzemolo|curcuma|cumino|cardamomo|vaniglia|lievito|bicarbonato|amido|maizena|semola|pesto|tahini|miso\b|colatura|soia.*salsa|worcester|tabasco/.test(n)) return 'condimenti';
+    if (/latte\b|yogurt|y[o]?gurt|yaourt|yougurt|yoghurt|formaggio|mozzarella|burro\b|panna\b|ricott|mascarpone|gorgonzola|parmigiano|grana\b|uova\b|uovo\b|egg\b|burrata|scamorza|provolone|pecorino|fontina|taleggio|stracchino|crescenza|brie\b|camembert|emmental|asiago|feta\b|provola|caciotta|caprino|philadelphia|skyr|kefir|labneh/.test(n)) return 'latticini';
+    // Conserve — controllo tonno\b PRIMA di condimenti (che ha olio\b)
+    if (/passata|pelati|pomodoro\b|pomodori|pomodorini|ciliegino|sugo\b|polpa di pomod|marmellata|miele\b|zagara|legumi|ceci\b|fagioli\b|lenticchie|olive\b|tonno\b|sgombro in scatola|concentrato|brodo\b|dado\b|besciamella|datterini|passato di/.test(n)) return 'conserve';
+    // Condimenti (include spezie, farine, zucchero, aromi, lieviti)
+    if (/olio\b|aceto|sale\b|pepe\b|zucchero|zuccher|farina\b|maionese|ketchup|senape|salsa\b|paprika|curry\b|cannella|noce moscata|origano|rosmarino|timo\b|basilico|prezzemolo|curcuma|cumino|cardamomo|vaniglia|lievito|bicarbonato|amido\b|maizena|semola|pesto\b|tahini|miso\b|colatura|soia.*salsa|worcester|tabasco|aroma\b|aromi\b|arome\b|estratto.*vaniglia|estratto.*limone|polenta\b|semolino\b|cacao amaro|cacao.*polvere|purea|pure\b|pur[ée]e/.test(n)) return 'condimenti';
     // Bevande (after latticini to avoid latte conflict)
-    if (/acqua\b|birra\b|vino\b|succo|spremuta|coca.cola|aranciata|caffè|tè\b|tea\b|tisana|camomilla|infuso|energy drink|bevanda|limonata|aranciate|sprite|pepsi|fanta|san pellegrino/.test(n)) return 'bevande';
+    if (/acqua\b|birra\b|vino\b|succo|spremuta|coca.cola|aranciata|caff[eè]\b|kaffee|kafè|t[eè]\b|tea\b|tisana|camomilla|infuso|energy drink|bevanda|limonata|aranciate|sprite|pepsi|fanta|san pellegrino|ciobar|ovomaltine|zuppalatte|cioccolata.*calda|latte.*cioccolato/.test(n)) return 'bevande';
     // Carne (include salumi)
-    if (/pollo|manzo|maiale|vitello|tacchino|prosciutto|salame|bresaola|mortadella|wurstel|speck|pancetta|nduja|guanciale|cotechino|salsiccia|agnello|cinghiale|polpette|arrosto|bistecca|cotoletta|lonza|braciola/.test(n)) return 'carne';
+    if (/pollo\b|manzo|maiale|vitello|tacchino|prosciutto|salame\b|bresaola|mortadella|wurstel|speck\b|pancetta|nduja|guanciale|cotechino|salsiccia|agnello|cinghiale|polpette|arrosto|bistecca|cotoletta|lonza|braciola|schinken|scamorza affumicat|spianata/.test(n)) return 'carne';
     // Pesce
-    if (/tonno|salmone|merluzzo|pesce|sgombro|gamberi|acciughe|baccalà|vongole|cozze|calamari|surimi|alici|branzino|orata|sardine|trota|dentice|seppia|polpo/.test(n)) return 'pesce';
+    if (/tonno\b|salmone|merluzzo|pesce\b|sgombro\b|gamberi|acciughe|baccal[aà]|vongole|cozze|calamari|surimi|alici|branzino|orata\b|sardine|trota|dentice|seppia|polpo|filetto.*pesce|pesce.*filetto/.test(n)) return 'pesce';
     // Frutta
-    if (/mela|mele|banana|arancia|pera|fragola|uva\b|kiwi|limone|frutta|mandarino|clementina|pompelmo|avocado|mango|ananas|melone|anguria|susina|prugna|ciliegia|albicocca|pesca\b|nettarina|fico\b|melograno|papaya|maracuja|cocco\b|dattero|fico\b|lampone|mirtillo|ribes|more\b/.test(n)) return 'frutta';
+    if (/mela\b|mele\b|banana|arancia|pera\b|fragola|uva\b|kiwi\b|limone|frutta\b|mandarino|clementina|pompelmo|avocado|mango\b|ananas|melone|anguria|susina|prugna|ciliegia|albicocca|pesca\b|nettarina|fico\b|melograno|papaya|maracuja|cocco\b|dattero|lampone|mirtillo|ribes|more\b/.test(n)) return 'frutta';
     // Verdura
-    if (/insalata|zucchina|pomodor|cipolla|carota|spinaci|rucola|peperoni|melanzane|broccoli|patata|finocchio|sedano|porro|scalogno|cavolo|cavolfiore|asparagi|funghi|courgette|lattuga|bietola|radicchio|carciofo|fagiolini|piselli|mais|zucca|aglio|cetriolo|rapa|barbabietola|cime di rapa|pak choi|bok choy|verza|cavolo nero/.test(n)) return 'verdura';
+    if (/insalata|zucchina|zucchine|pomodor|cipolla|carota|spinaci|rucola|peperoni|melanzane|broccoli|patata|finocchio|sedano|porro|scalogno|cavolo|cavolfiore|asparagi|funghi|courgette|lattuga|bietola|radicchio|carciofo|fagiolini|piselli|mais\b|zucca\b|aglio\b|cetriolo|rapa\b|barbabietola|cime di rapa|pak choi|bok choy|verza|cavolo nero/.test(n)) return 'verdura';
     // Surgelati
-    if (/surgelat|frozen|findus|4.salti|gelato|minestrone surgelato/.test(n)) return 'surgelati';
+    if (/surgelat|frozen|findus|4.salti|gelato|minestrone surgelato|potato wedge|potato.*wedge/.test(n)) return 'surgelati';
     // Snack & Dolci
-    if (/biscott|cioccolat|nutella|merendine|patatine|caramelle|wafer|sfornatini|torta|pandoro|panettone|colomba|cornetto|brioche|croissant|dolc|dessert|tiramisù/.test(n)) return 'snack';
+    if (/biscott|cioccolat|nutella|merendine\b|merendina|patatine|caramelle|wafer|cialda|cialdine|sfornatini|torta\b|pandoro|panettone|colomba|cornetto|brioche|croissant|dolc|dessert|tiramis[uù]|cantucci|amaretti|savoiardi|pralin|confetti dolci|chicchi.*cacao|cacao.*chicchi|risofrolle|sfogliatine|ossi di morto|canestrelli|snack/.test(n)) return 'snack';
     // Cereali
-    if (/cereali|muesli|fiocchi|granola|polenta|porridge|avena/.test(n)) return 'cereali';
+    if (/cereali|muesli|fiocchi|granola|porridge|avena|mix energia|misto cereal|farro\b|orzo\b|quinoa/.test(n)) return 'cereali';
     // Igiene personale
     if (/sapone|shampoo|dentifricio|deodorante|carta igienica|fazzoletti|cotton fioc|assorbente|rasoio|schiuma da barba|gel doccia|balsamo\b|lozione/.test(n)) return 'igiene';
     // Pulizia casa
-    if (/detersivo|pulito|sgrassatore|candeggina|ammorbidente|anticalcare|bucato|piatti|lavatrice|lavastoviglie|detergente/.test(n)) return 'pulizia';
+    if (/detersivo|pulito|sgrassatore|candeggina|ammorbidente|anticalcare|bucato|piatti\b|lavatrice|lavastoviglie|detergente/.test(n)) return 'pulizia';
     return 'altro';
 }
 
@@ -1649,7 +1669,7 @@ function estimateOpenedExpiryDays(product, location) {
     if (/latte\s+(uht|a\s+lunga)/.test(name)) return 7;
     // Long-life mountain/brand milks stored in pantry before use (UHT)
     if (/latte.*(montagna|alta\s+qual|parmalat|granarolo|esselunga|conservaz|microfiltrat)/i.test(name)) return 7;
-    if (/\blatte\b/.test(name)) return 4;
+    if (/\blatte\b/.test(name)) return 7; // generic: default to UHT (most common in IT households)
     if (/\b(yogurt|yaourt|yoghurt)\b/.test(name)) return 5;
     if (/mozzarella|burrata|stracciatella/.test(name)) return 3;
     if (/philadelphia|spalmabile/.test(name)) return 7;
@@ -2132,7 +2152,7 @@ window._kioskUpdateResult = function(result) {
     const verLabel   = document.getElementById('kiosk-update-version-label');
     if (!status) return;
 
-    if (btn) { btn.disabled = false; btn.textContent = '🔍 Cerca aggiornamenti'; }
+    if (btn) { btn.disabled = false; btn.textContent = t('kiosk.check_btn'); }
 
     if (result.error && !result.has_update) {
         status.style.display = '';
@@ -2145,7 +2165,7 @@ window._kioskUpdateResult = function(result) {
 
     const current = result.current || '?';
     const latest  = result.latest  || '?';
-    if (verLabel) verLabel.textContent = `Installata: ${current}`;
+    if (verLabel) verLabel.textContent = t('kiosk.version_installed').replace('{v}', current);
 
     if (result.has_update) {
         _kioskPendingApkUrl = result.apk_url || '';
@@ -2153,7 +2173,7 @@ window._kioskUpdateResult = function(result) {
         status.style.background = 'rgba(245,158,11,0.1)';
         status.style.border = '1px solid rgba(245,158,11,0.35)';
         status.style.color = '';
-        status.innerHTML = `⬆️ Nuova versione disponibile: <strong>${latest}</strong> (installata: ${current})`;
+        status.innerHTML = t('kiosk.update_available').replace('{latest}', latest).replace('{current}', current);
         if (installBtn) installBtn.style.display = '';
     } else {
         _kioskPendingApkUrl = '';
@@ -2161,7 +2181,7 @@ window._kioskUpdateResult = function(result) {
         status.style.background = 'rgba(52,211,153,0.1)';
         status.style.border = '1px solid rgba(52,211,153,0.3)';
         status.style.color = '';
-        status.innerHTML = `✅ Sei già aggiornato — versione <strong>${current}</strong>`;
+        status.innerHTML = t('kiosk.up_to_date').replace('{v}', current);
         if (installBtn) installBtn.style.display = 'none';
     }
 };
@@ -2175,8 +2195,7 @@ function _kioskCheckForUpdates() {
             status.style.display = '';
             status.style.background = 'rgba(245,158,11,0.1)';
             status.style.border = '1px solid rgba(245,158,11,0.35)';
-            status.innerHTML = `⚠️ Il kiosk installato è troppo vecchio per il controllo automatico.<br>
-                Premi il pulsante qui sotto per scaricare e installare la v1.7.0 direttamente.`;
+            status.innerHTML = t('kiosk.too_old');
         }
         // Pre-set the pending URL and show the install button (installUpdate works in old APKs too)
         _kioskPendingApkUrl = 'https://github.com/dadaloop82/EverShelf/releases/download/kiosk-latest/evershelf-kiosk.apk';
@@ -2186,13 +2205,13 @@ function _kioskCheckForUpdates() {
     const btn    = document.getElementById('btn-kiosk-check-update');
     const status = document.getElementById('kiosk-update-status');
     const installBtn = document.getElementById('btn-kiosk-install-update');
-    if (btn)        { btn.disabled = true; btn.textContent = '⏳ Controllo…'; }
+    if (btn)        { btn.disabled = true; btn.textContent = t('kiosk.checking'); }
     if (status)     { status.style.display = 'none'; }
     if (installBtn) { installBtn.style.display = 'none'; }
     _kioskPendingApkUrl = '';
     try { _kioskBridge.checkForUpdates(); } catch(e) {
-        if (btn) { btn.disabled = false; btn.textContent = '🔍 Cerca aggiornamenti'; }
-        showToast('❌ Errore durante il controllo', 'error');
+        if (btn) { btn.disabled = false; btn.textContent = t('kiosk.check_btn'); }
+        showToast('❌ ' + t('kiosk.error_check'), 'error');
     }
 }
 
@@ -2206,22 +2225,18 @@ function _kioskInstallUpdate() {
             status.style.display = '';
             status.style.background = 'rgba(239,68,68,0.1)';
             status.style.border = '1px solid rgba(239,68,68,0.3)';
-            status.innerHTML = `⚠️ Questo kiosk non supporta l'installazione automatica.<br>
-                <strong>Procedura manuale:</strong><br>
-                1. Esci dal kiosk (tasto ✕ in alto a sinistra)<br>
-                2. Disinstalla l'app EverShelf Kiosk<br>
-                3. Scarica e installa la nuova APK da GitHub:<br>
-                <code style="font-size:0.75rem;word-break:break-all">
-                https://github.com/dadaloop82/EverShelf/releases/download/kiosk-latest/evershelf-kiosk.apk
+            status.innerHTML = t('kiosk.manual_install') +
+                `<br><code style="font-size:0.75rem;word-break:break-all">
+https://github.com/dadaloop82/EverShelf/releases/download/kiosk-latest/evershelf-kiosk.apk
                 </code>`;
         }
         return;
     }
     const installBtn = document.getElementById('btn-kiosk-install-update');
-    if (installBtn) { installBtn.disabled = true; installBtn.textContent = '⏳ Avvio download…'; }
+    if (installBtn) { installBtn.disabled = true; installBtn.textContent = t('kiosk.starting_download'); }
     try { _kioskBridge.installUpdate(_kioskPendingApkUrl); } catch(e) {
-        if (installBtn) { installBtn.disabled = false; installBtn.textContent = '⬇️ Installa aggiornamento'; }
-        showToast('❌ Errore avvio installazione', 'error');
+        if (installBtn) { installBtn.disabled = false; installBtn.textContent = t('kiosk.install_btn'); }
+        showToast('❌ ' + t('kiosk.error_start_install'), 'error');
     }
 }
 
@@ -2251,7 +2266,7 @@ function _injectKioskOverlay() {
     const exitBtn = document.createElement('button');
     exitBtn.id = '_kiosk_exit_btn';
     exitBtn.textContent = '\u2715';
-    exitBtn.title = 'Esci dal kiosk';
+    exitBtn.title = t('kiosk.exit_title');
     exitBtn.style.cssText = btnStyle;
     exitBtn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -2262,7 +2277,7 @@ function _injectKioskOverlay() {
     const refBtn = document.createElement('button');
     refBtn.id = '_kiosk_refresh_btn';
     refBtn.textContent = '\u21bb';
-    refBtn.title = 'Aggiorna pagina';
+    refBtn.title = t('kiosk.refresh_title');
     refBtn.style.cssText = btnStyle.replace('font-size:15px', 'font-size:18px');
     refBtn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -2277,7 +2292,7 @@ function _injectKioskOverlay() {
 function renderAppliances(appliances) {
     const container = document.getElementById('appliances-list');
     if (!appliances || appliances.length === 0) {
-        container.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;padding:8px 0">Nessun elettrodomestico aggiunto</p>';
+        container.innerHTML = `<p style="color:var(--text-muted);font-size:0.85rem;padding:8px 0">${t('appliances.empty')}</p>`;
         return;
     }
     container.innerHTML = appliances.map((a, i) => `
@@ -2500,9 +2515,9 @@ async function api(action, params = {}, method = 'GET', body = null, extraHeader
             url += `&${encodeURIComponent(k)}=${encodeURIComponent(v)}`;
         });
     }
-    const opts = { method };
+    const opts = { method, cache: 'no-store' };
     if (body) {
-        opts.headers = { 'Content-Type': 'application/json', ...extraHeaders };
+        opts.headers = { 'Content-Type': 'application/json', 'X-EverShelf-Request': '1', ...extraHeaders };
         opts.body = JSON.stringify(body);
     } else if (Object.keys(extraHeaders).length > 0) {
         opts.headers = { ...extraHeaders };
@@ -2598,6 +2613,20 @@ function showPage(pageId, param = null) {
     if (_bannerRefreshTimer) { clearInterval(_bannerRefreshTimer); _bannerRefreshTimer = null; }
     if (pageId === 'dashboard') {
         _bannerRefreshTimer = setInterval(() => loadBannerAlerts(), 5 * 60 * 1000);
+    }
+
+    // Auto-refresh shopping list every 45s while on shopping page so all clients stay in sync
+    if (_shoppingPollTimer) { clearInterval(_shoppingPollTimer); _shoppingPollTimer = null; }
+    if (pageId === 'shopping') {
+        _shoppingPollTimer = setInterval(() => {
+            loadShoppingList._bgCall = true;
+            loadShoppingList();
+            loadSmartShopping().then(() => {
+                _syncOnBringFlags();
+                renderSmartShopping();
+                updateShoppingTabCounts();
+            });
+        }, 45 * 1000);
     }
     
     // Stop scanner when leaving scan page
@@ -3067,14 +3096,14 @@ function _renderNutritionSection(inventory) {
 
     // Score colour
     const scoreColor = healthScore >= 70 ? '#4ade80' : healthScore >= 45 ? '#fbbf24' : '#f87171';
-    const scoreLabel = healthScore >= 70 ? '😄 Ottimo' : healthScore >= 45 ? '🙂 Discreto' : '😬 Migliorabile';
+    const scoreLabel = healthScore >= 70 ? t('nutrition.score_excellent') : healthScore >= 45 ? t('nutrition.score_good') : t('nutrition.score_improve');
 
     section.innerHTML = `
     <div class="nutr-card">
         <div class="aw-header">
             <div class="aw-title-row">
                 <span class="aw-live-dot aw-live-on"></span>
-                <h3 class="aw-title">🥗 Analisi Alimentare</h3>
+                <h3 class="aw-title">${t('nutrition.title')}</h3>
             </div>
             <span class="aw-grade" style="background:${scoreColor};font-size:.75rem;padding:4px 10px">${scoreLabel}</span>
         </div>
@@ -3085,7 +3114,7 @@ function _renderNutritionSection(inventory) {
                 <div class="nutr-pie-3d" id="nutr-pie" style="background:${gradient}"></div>
                 <div class="nutr-pie-center">
                     <span class="nutr-pie-total">${total}</span>
-                    <span class="nutr-pie-label">prodotti</span>
+                    <span class="nutr-pie-label">${t('nutrition.products_count')}</span>
                 </div>
             </div>
 
@@ -3103,12 +3132,12 @@ function _renderNutritionSection(inventory) {
 
         <!-- Score bar row -->
         <div class="nutr-scores">
-            ${_nutrScoreBar('🌿 Salute', healthScore, '#4ade80')}
-            ${_nutrScoreBar('🎨 Varietà', varietyScore, '#60a5fa')}
-            ${_nutrScoreBar('❄️ Freschi', fresh_pct, '#22d3ee')}
+            ${_nutrScoreBar(t('nutrition.label_health'), healthScore, '#4ade80')}
+            ${_nutrScoreBar(t('nutrition.label_variety'), varietyScore, '#60a5fa')}
+            ${_nutrScoreBar(t('nutrition.label_fresh'), fresh_pct, '#22d3ee')}
         </div>
 
-        <div class="aw-source">Basato su ${total} prodotti in dispensa · EverShelf</div>
+        <div class="aw-source">${t('nutrition.source').replace('{n}', total)}</div>
     </div>`;
 
     // Trigger pie animation after render
@@ -3477,18 +3506,22 @@ function _dismissNoExpiry(productId) {
 // === ALERT BANNER SYSTEM (replaces old review table) ===
 let _bannerQueue = [];   // array of { type, data } — 'review' or 'prediction'
 let _bannerIndex = 0;
+let _bannerLoading = false; // guard against concurrent calls
 let _bannerEditPending = false;  // true when editing from banner → dismiss after save
 let _bannerRefreshTimer = null;  // periodic refresh while on dashboard
+let _shoppingPollTimer  = null;  // periodic refresh while on shopping page (multi-client sync)
 
 /**
  * Load suspicious quantities + consumption predictions + expired + expiring soon,
  * merge into a single banner queue and show the first item.
  */
 async function loadBannerAlerts() {
+    if (_bannerLoading) return;
+    _bannerLoading = true;
     _bannerQueue = [];
     _bannerIndex = 0;
     const banner = document.getElementById('alert-banner');
-    if (!banner) { console.warn('[Banner] #alert-banner not found'); return; }
+    if (!banner) { _bannerLoading = false; console.warn('[Banner] #alert-banner not found'); return; }
 
     try {
         const [invData, predData, anomalyData, finishedData] = await Promise.all([
@@ -3499,6 +3532,8 @@ async function loadBannerAlerts() {
         ]);
         const items = invData.inventory || [];
         const confirmed = getReviewConfirmed();
+        // Track item IDs already queued to prevent the same item appearing in multiple types
+        const _queuedItemIds = new Set();
 
         // 1. Expired products (highest priority) - derived from inventory
         // Also considers opened_at: if item is opened and its opened-shelf-life has passed, it's expired too
@@ -3531,6 +3566,7 @@ async function loadBannerAlerts() {
             // Skip items the freezer bonus still considers safe — no need to alarm the user
             if (getExpiredSafety(item, daysExpired).level === 'ok') return;
             _bannerQueue.push({ type: 'expired', data: { ...item, days_expired: daysExpired } });
+            _queuedItemIds.add(item.id);
         });
 
         // 2. Suspicious quantities ("expiring soon" shown only in dashboard sections, not in banner)
@@ -3546,6 +3582,7 @@ async function loadBannerAlerts() {
         });
 
         items.forEach(item => {
+            if (_queuedItemIds.has(item.id)) return; // already in expired
             if (confirmed[item.id]) return;
             const t_ = QTY_THRESHOLDS[item.unit] || QTY_THRESHOLDS['pz'];
             const qty = parseFloat(item.quantity);
@@ -3584,6 +3621,7 @@ async function loadBannerAlerts() {
             else if (isLow) warning = '⬇️ Troppo poco';
             else warning = '⬆️ Troppo';
             _bannerQueue.push({ type: 'review', data: { ...item, warning, _isLow: isLow } });
+            _queuedItemIds.add(item.id);
         });
 
         // 4. Consumption predictions that don't match actual quantity
@@ -3612,6 +3650,7 @@ async function loadBannerAlerts() {
         const PERISHABLE_CATS = ['latticini','carne','pesce','salumi','fresco','verdura','frutta','surgelati',
                                   'dairy','meat','fish','fresh','vegetables','fruit','frozen'];
         items.forEach(item => {
+            if (_queuedItemIds.has(item.id)) return; // already in expired or review
             if (item.expiry_date) return;               // already has expiry
             if (parseFloat(item.quantity) <= 0) return; // no stock
             const pid = String(item.product_id || item.id);
@@ -3635,6 +3674,8 @@ async function loadBannerAlerts() {
 
     } catch (e) {
         console.error('[Banner] loadBannerAlerts error:', e);
+    } finally {
+        _bannerLoading = false;
     }
 
     if (_bannerQueue.length > 0) {
@@ -3705,10 +3746,32 @@ function renderBannerItem() {
     if (entry.type === 'expired') {
         const item = entry.data;
         const qtyDisplay = formatQuantity(item.quantity, item.unit, item.default_quantity, item.package_unit);
-        const daysText = item.days_expired === 0
-            ? t('expiry.expired_today_long')
-            : t('expiry.expired_ago_long').replace('{n}', item.days_expired);
+        const isOpenedExpiry = !!item.opened_at;
         const safety = getExpiredSafety(item, item.days_expired);
+
+        let daysText, suffix;
+        if (isOpenedExpiry) {
+            const todayMs = new Date(); todayMs.setHours(0, 0, 0, 0);
+            const daysSinceOpened = Math.round((todayMs - new Date(item.opened_at)) / 86400000);
+            daysText = daysSinceOpened === 0
+                ? t('expiry.opened_today_long')
+                : t('expiry.opened_ago_long').replace('{n}', daysSinceOpened);
+            suffix = safety.level === 'ok'
+                ? t('expiry.opened_suffix_ok')
+                : safety.level === 'warning'
+                    ? t('expiry.opened_suffix_warning')
+                    : t('expiry.opened_suffix');
+        } else {
+            daysText = item.days_expired === 0
+                ? t('expiry.expired_today_long')
+                : t('expiry.expired_ago_long').replace('{n}', item.days_expired);
+            suffix = safety.level === 'ok'
+                ? t('expiry.expired_suffix_ok')
+                : safety.level === 'warning'
+                    ? t('expiry.expired_suffix_warning')
+                    : t('expiry.expired_suffix');
+        }
+
         if (safety.level === 'danger') {
             banner.className = 'alert-banner banner-expired banner-expired-danger';
             iconEl.textContent = '🚫';
@@ -3719,13 +3782,23 @@ function renderBannerItem() {
             banner.className = 'alert-banner banner-expired banner-expired-ok';
             iconEl.textContent = '✅';
         }
-        const expiredSuffix = safety.level === 'ok'
-            ? t('expiry.expired_suffix_ok')
-            : safety.level === 'warning'
-                ? t('expiry.expired_suffix_warning')
-                : t('expiry.expired_suffix');
-        titleEl.textContent = `${item.name}${item.brand ? ' (' + item.brand + ')' : ''} ${expiredSuffix}`;
-        const baseDetail = t('dashboard.banner_expired_detail').replace('{when}', daysText).replace('{qty}', qtyDisplay);
+        titleEl.textContent = `${item.name}${item.brand ? ' (' + item.brand + ')' : ''} ${suffix}`;
+
+        let baseDetail;
+        if (isOpenedExpiry) {
+            const locLabel = (LOCATIONS[item.location]
+                ? LOCATIONS[item.location].icon + ' ' + LOCATIONS[item.location].label
+                : (item.location || ''));
+            baseDetail = t('dashboard.banner_opened_detail')
+                .replace('{when}', daysText)
+                .replace('{location}', escapeHtml(locLabel))
+                .replace('{qty}', qtyDisplay);
+        } else {
+            baseDetail = t('dashboard.banner_expired_detail').replace('{when}', daysText).replace('{qty}', qtyDisplay);
+            const locationTag = item.location ? ` · <strong>${escapeHtml(item.location)}</strong>` : '';
+            const expiryTag = item.expiry_date ? ` · ${escapeHtml(item.expiry_date)}` : '';
+            baseDetail += locationTag + expiryTag;
+        }
         detailEl.innerHTML = `${baseDetail} <span class="banner-safety-tip banner-safety-${safety.level}">${safety.icon} ${safety.tip}</span>`;
         let btns = '';
         if (safety.level !== 'danger') {
@@ -3841,7 +3914,7 @@ function renderBannerItem() {
         let btns = `<button class="btn-banner btn-banner-edit" onclick="editBannerAnomaly()">${t('dashboard.banner_anomaly_action_edit')}</button>`;
         btns += `<button class="btn-banner btn-banner-ok" onclick="dismissBannerAnomaly()">${t('dashboard.banner_anomaly_action_dismiss')} (${an.inv_qty} ${an.unit})</button>`;
         if (_geminiAvailable) {
-            btns += `<button class="btn-banner btn-banner-ai" onclick="explainBannerAnomaly()" title="Chiedi a Gemini una spiegazione">\ud83e\udd16 Spiega</button>`;
+            btns += `<button class="btn-banner btn-banner-ai" onclick="explainBannerAnomaly()" title="${t('dashboard.banner_explain_title')}">\ud83e\udd16 ${t('dashboard.banner_explain_btn')}</button>`;
         }
         actionsEl.innerHTML = btns;
 
@@ -3898,7 +3971,10 @@ function editBannerNoExpiry() {
     const entry = _bannerQueue[_bannerIndex];
     if (!entry || entry.type !== 'no_expiry') return;
     _bannerEditPending = true;
-    openEditInventoryModal(entry.data.id);
+    api('inventory_list').then(data => {
+        currentInventory = data.inventory || [];
+        editInventoryItem(entry.data.id);
+    });
 }
 
 function editBannerReview() {
@@ -3933,7 +4009,7 @@ async function explainBannerAnomaly() {
     const detailEl = document.getElementById('alert-banner-detail');
     if (!detailEl) return;
     const originalHtml = detailEl.innerHTML;
-    detailEl.innerHTML = '<em style="opacity:0.7">\ud83e\udd16 Analizzo\u2026</em>';
+    detailEl.innerHTML = `<em style="opacity:0.7">${t('dashboard.banner_analyzing')}</em>`;
 
     // Disable the Spiega button to prevent double calls
     const explainBtn = document.querySelector('#alert-banner .btn-banner-ai');
@@ -4352,7 +4428,10 @@ async function loadInventory() {
 }
 
 function renderInventoryItem(item) {
-    const catIcon = CATEGORY_ICONS[mapToLocalCategory(item.category, item.name)] || '📦';
+    const catKey = mapToLocalCategory(item.category, item.name);
+    const catIcon = CATEGORY_ICONS[catKey] || '📦';
+    const catLabel = t('categories.' + catKey) || catKey;
+    const catBadge = `<span class="inv-badge badge-category" data-cat="${catKey}" data-itemname="${escapeHtml(item.name)}">${catIcon} ${catLabel}</span>`;
     const locInfo = LOCATIONS[item.location] || { icon: '📦', label: item.location };
     const days = daysUntilExpiry(item.expiry_date);
     const isExpired = days < 0;
@@ -4383,6 +4462,7 @@ function renderInventoryItem(item) {
             ${item.brand ? `<div class="inv-brand">${escapeHtml(item.brand)}</div>` : ''}
             <div class="inv-meta">
                 <span class="inv-badge badge-location">${locInfo.icon} ${locInfo.label}</span>
+                ${catBadge}
                 ${expiryBadge}
                 ${openedBadge}
                 ${vacuumBadge}
@@ -4403,6 +4483,28 @@ function renderInventory(items) {
         return;
     }
     container.innerHTML = renderGroupedByCategory(items, false);
+    _refineCategoryBadgesAsync();
+}
+
+/**
+ * After rendering, find all badges still showing 'altro' and ask the server
+ * (Gemini-backed, cached) for a better category. Updates the DOM in place.
+ */
+async function _refineCategoryBadgesAsync() {
+    if (!_geminiAvailable) return; // AI not available — keep 'altro' label
+    const badges = Array.from(document.querySelectorAll('.badge-category[data-cat="altro"]'));
+    for (const badge of badges) {
+        const name = badge.dataset.itemname;
+        if (!name) continue;
+        try {
+            const res = await api('guess_category', { name });
+            const cat = res.category;
+            if (cat && cat !== 'altro') {
+                badge.dataset.cat = cat;
+                badge.textContent = (CATEGORY_ICONS[cat] || '📦') + ' ' + (t('categories.' + cat) || cat);
+            }
+        } catch (_) { /* network error — leave as 'altro' */ }
+    }
 }
 
 function filterLocation(loc) {
@@ -4422,11 +4524,21 @@ function filterInventory() {
         return;
     }
     if (qas) qas.style.display = 'none';
-    const filtered = currentInventory.filter(i =>
-        i.name.toLowerCase().includes(q) ||
-        (i.brand && i.brand.toLowerCase().includes(q)) ||
-        (i.barcode && i.barcode.includes(q))
-    );
+    // Category inferred from the search term itself (e.g. "biscotti" → "snack")
+    const queryCat = guessCategoryFromName(q);
+    const filtered = currentInventory.filter(i => {
+        if (i.name.toLowerCase().includes(q)) return true;
+        if (i.brand && i.brand.toLowerCase().includes(q)) return true;
+        if (i.barcode && i.barcode.includes(q)) return true;
+        const itemCat = mapToLocalCategory(i.category, i.name);
+        // Match category key directly (e.g. "snack", "latticini")
+        if (itemCat.includes(q)) return true;
+        // Match category label (e.g. "dolci" matches "Snack & Dolci", "riso" matches "Pasta & Riso")
+        if ((CATEGORY_LABELS[itemCat] || '').toLowerCase().includes(q)) return true;
+        // Match by inferred category: "biscotti" → queryCat="snack" → all snack items
+        if (queryCat !== 'altro' && itemCat === queryCat) return true;
+        return false;
+    });
     renderInventory(filtered);
 }
 
@@ -4554,6 +4666,7 @@ function showItemDetail(inventoryId, productId) {
         <div class="modal-actions">
             <button class="btn btn-danger flex-1" onclick="quickUse(${item.product_id}, '${item.location}')">📤 Usa</button>
             <button class="btn btn-primary flex-1" onclick="editInventoryItem(${inventoryId})">✏️ Modifica</button>
+            <button class="btn btn-accent flex-1" onclick="closeModal();generateRecipeForIngredient(${JSON.stringify(item.name)})">🍳 Ricetta</button>
             <button class="btn btn-secondary" onclick="deleteInventoryItem(${inventoryId})" style="padding:12px">🗑️</button>
         </div>
     `;
@@ -4852,6 +4965,19 @@ async function initScanner() {
     }
 }
 
+// ===== EAN-13 / EAN-8 CHECKSUM VALIDATOR =====
+function validateEANChecksum(code) {
+    const s = String(code).replace(/\D/g, '');
+    if (s.length !== 13 && s.length !== 8) return false;
+    const digits = s.split('').map(Number);
+    const last = digits.pop();
+    const sum = digits.reduce((acc, d, i) => {
+        return acc + d * (s.length === 13 ? (i % 2 === 0 ? 1 : 3) : (i % 2 === 0 ? 3 : 1));
+    }, 0);
+    const check = (10 - (sum % 10)) % 10;
+    return check === last;
+}
+
 // ===== NATIVE BarcodeDetector SCANNER =====
 async function startNativeScanner(videoEl) {
     if (quaggaRunning) return;
@@ -4868,6 +4994,8 @@ async function startNativeScanner(videoEl) {
     let lastDetected = '';
     let detectCount = 0;
     let detectionHistory = {};
+    let quaggaParallelStarted = false;
+    const startTime = Date.now();
     
     scanLog('Native BarcodeDetector started');
     
@@ -4882,6 +5010,15 @@ async function startNativeScanner(videoEl) {
         frameCount++;
         
         if (frameCount === 1) updateFeedback('scanning');
+
+        // After 2s without detection, also start Quagga in parallel as backup
+        if (!quaggaParallelStarted && (Date.now() - startTime) > 2000) {
+            quaggaParallelStarted = true;
+            scanLog('Native: 2s elapsed, spawning Quagga in parallel');
+            quaggaRunning = false; // temporarily release so Quagga can start
+            startQuaggaScanner(videoEl);
+            quaggaRunning = true; // re-take ownership (Quagga will share)
+        }
         
         try {
             const barcodes = await detector.detect(videoEl);
@@ -4903,11 +5040,14 @@ async function startNativeScanner(videoEl) {
                     detectCount = 1;
                 }
                 
-                if (detectCount >= 2 || detectionHistory[code].count >= 2) {
+                // EAN/UPC have built-in checksum — confirm on first hit for speed.
+                // For other formats (code_128, code_39) require 2 to avoid false reads.
+                const highConfidence = ['ean_13','ean_8','upc_a','upc_e'].includes(format);
+                if (highConfidence || detectCount >= 2 || detectionHistory[code].count >= 2) {
                     scanning = false;
                     quaggaRunning = false;
                     updateFeedback(null);
-                    scanLog(`CONFIRMED: ${code} after ${frameCount} frames`);
+                    scanLog(`CONFIRMED: ${code} after ${frameCount} frames (${format})`);
                     onBarcodeDetected(code);
                     return;
                 }
@@ -4949,7 +5089,7 @@ function startQuaggaScanner(videoEl) {
     let detectionHistory = {};
     
     // Alternate between full frame and center-cropped for better detection
-    let scanPass = 0; // 0=full, 1=center-crop, 2=full-enhanced, 3=center-enhanced
+    let scanPass = 0; // 0=full, 1=center-crop
     
     function updateScannerFeedback(state) {
         if (!scannerLine) return;
@@ -4962,12 +5102,13 @@ function startQuaggaScanner(videoEl) {
         const vh = videoEl.videoHeight;
         
         if (pass % 2 === 0) {
-            // Full frame
-            canvas.width = vw;
-            canvas.height = vh;
-            ctx.drawImage(videoEl, 0, 0);
+            // Full frame (scaled down for speed)
+            const scale = 0.75;
+            canvas.width = Math.round(vw * scale);
+            canvas.height = Math.round(vh * scale);
+            ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
         } else {
-            // Center crop: 60% of frame, focused on barcode area
+            // Center crop: 70% wide, 40% tall — focused on barcode area
             const cropW = Math.round(vw * 0.7);
             const cropH = Math.round(vh * 0.4);
             const sx = Math.round((vw - cropW) / 2);
@@ -4977,18 +5118,18 @@ function startQuaggaScanner(videoEl) {
             ctx.drawImage(videoEl, sx, sy, cropW, cropH, 0, 0, cropW, cropH);
         }
         
-        // Apply enhancement on passes 2,3 or always for front cam
-        if (frontCam || pass >= 2) {
+        // Apply enhancement for front cam or low-light
+        if (frontCam) {
             enhanceCanvasForBarcode(ctx, canvas.width, canvas.height);
         }
         
-        return canvas.toDataURL('image/jpeg', 0.95);
+        return canvas.toDataURL('image/jpeg', 0.85);
     }
     
     function scanFrame() {
         if (!scanning || !scannerStream) return;
         frameCount++;
-        scanPass = (scanPass + 1) % 4;
+        scanPass = (scanPass + 1) % 2;
         
         const dataUrl = getFrameDataUrl(scanPass);
         
@@ -5001,29 +5142,29 @@ function startQuaggaScanner(videoEl) {
         const safetyTimer = setTimeout(() => {
             if (!callbackCalled && scanning) {
                 scanLog(`Quagga timeout on f${frameCount}, retrying...`);
-                setTimeout(scanFrame, 100);
+                setTimeout(scanFrame, 50);
             }
-        }, 5000);
+        }, 2000);
         
         try {
             const imgSize = Math.max(canvas.width, canvas.height);
             Quagga.decodeSingle({
                 src: dataUrl,
                 numOfWorkers: 0,
-                inputStream: { size: Math.min(imgSize, 800) },
+                inputStream: { size: Math.min(imgSize, 640) },
                 decoder: {
                     readers: [
                         'ean_reader',
                         'ean_8_reader',
-                        'code_128_reader',
-                        'code_39_reader',
                         'upc_reader',
-                        'upc_e_reader'
+                        'upc_e_reader',
+                        'code_128_reader',
+                        'code_39_reader'
                     ],
                     multiple: false
                 },
                 locate: true,
-                locator: { patchSize: 'large', halfSample: false }
+                locator: { patchSize: 'medium', halfSample: true }
             }, function(result) {
                 callbackCalled = true;
                 clearTimeout(safetyTimer);
@@ -5047,11 +5188,14 @@ function startQuaggaScanner(videoEl) {
                     }
                     
                     const dominated = detectionHistory[code];
-                    if (detectCount >= 2 || dominated.count >= 2) {
+                    const passName2 = ['full','crop'][scanPass];
+                    // EAN/UPC: confirm on first hit (checksum validated)
+                    const highConf = ['ean_reader','ean_8_reader','upc_reader','upc_e_reader'].includes(format);
+                    if (highConf || detectCount >= 2 || dominated.count >= 2) {
                         scanning = false;
                         quaggaRunning = false;
                         updateScannerFeedback(null);
-                        scanLog(`CONFIRMED: ${code} after ${frameCount} frames (consec:${detectCount}, total:${dominated.count})`);
+                        scanLog(`CONFIRMED: ${code} [${passName2}] f${frameCount} consec:${detectCount} total:${dominated.count}`);
                         onBarcodeDetected(code);
                         return;
                     }
@@ -5060,9 +5204,9 @@ function startQuaggaScanner(videoEl) {
                 }
                 if (scanning) {
                     if (frameCount % 20 === 0) {
-                        scanLog(`Scanning... f${frameCount}, partials: ${partialCount}, pass: ${scanPass}`);
+                        scanLog(`Scanning... f${frameCount}, partials: ${partialCount}`);
                     }
-                    setTimeout(scanFrame, 150);
+                    setTimeout(scanFrame, 60);
                 }
             });
         } catch (e) {
@@ -5073,7 +5217,7 @@ function startQuaggaScanner(videoEl) {
         }
     }
     
-    setTimeout(scanFrame, 500);
+    setTimeout(scanFrame, 200);
 }
 
 // Enhance low-quality camera frames for better barcode recognition
@@ -5244,19 +5388,31 @@ async function onBarcodeDetected(barcode) {
 
 function submitManualBarcode() {
     const input = document.getElementById('manual-barcode-input');
-    const barcode = (input.value || '').trim();
-    if (!barcode) {
-        showToast(t('error.barcode_empty'), 'error');
-        input.focus();
+    autoSubmitEAN(input, true);
+}
+
+// Auto-submit when user finishes typing a valid EAN-13 or EAN-8
+function autoSubmitEAN(inputEl, force = false) {
+    const raw = (inputEl.value || '').replace(/\D/g, '');
+    inputEl.value = raw; // strip non-digits live
+    if (!raw) return;
+    const isComplete = raw.length === 13 || raw.length === 8;
+    const isValid = isComplete && validateEANChecksum(raw);
+    if (isValid) {
+        // Auto-submit on valid EAN
+        stopScanner();
+        onBarcodeDetected(raw);
         return;
     }
-    if (!/^\d{4,14}$/.test(barcode)) {
-        showToast(t('error.barcode_format'), 'error');
-        input.focus();
-        return;
+    if (force) {
+        if (!raw) { showToast(t('error.barcode_empty'), 'error'); inputEl.focus(); return; }
+        if (!/^\d{4,14}$/.test(raw)) { showToast(t('error.barcode_format'), 'error'); inputEl.focus(); return; }
+        if (isComplete && !isValid) {
+            showToast('⚠️ Checksum EAN errato — verifica le cifre', 'warning');
+        }
+        stopScanner();
+        onBarcodeDetected(raw);
     }
-    stopScanner();
-    onBarcodeDetected(barcode);
 }
 
 // ===== QUICK NAME ENTRY (for loose/unpackaged products) =====
@@ -5441,7 +5597,7 @@ function startManualEntry(barcode = '') {
     document.getElementById('pf-barcode').value = barcode || '';
     document.getElementById('pf-image').value = '';
     document.getElementById('pf-image-preview').style.display = 'none';
-    document.getElementById('product-form-title').textContent = 'Nuovo Prodotto';
+    document.getElementById('product-form-title').textContent = t('product.title_new');
     const pfAiRow = document.getElementById('pf-ai-fill-row');
     if (pfAiRow) pfAiRow.style.display = 'block';
 
@@ -5628,10 +5784,19 @@ async function scanBarcodeForForm() {
         </div>
         <p style="text-align:center;margin-top:12px;color:var(--text-muted);font-size:0.88rem">${t('scanner.barcode_hint')}</p>
         <div style="margin-top:10px;text-align:center">
-            <input type="text" id="pf-bc-manual" class="form-input" placeholder="${t('scanner.barcode_manual_placeholder')}" inputmode="numeric" style="max-width:260px;display:inline-block">
+            <input type="text" id="pf-bc-manual" class="form-input" placeholder="${t('scanner.barcode_manual_placeholder')}" inputmode="numeric" maxlength="14" style="max-width:260px;display:inline-block" oninput="
+                const raw=(this.value||'').replace(/\\D/g,''); this.value=raw;
+                if((raw.length===13||raw.length===8)&&validateEANChecksum(raw)){
+                    stopStream();
+                    document.getElementById('pf-barcode').value=raw;
+                    _updateBarcodeHint();
+                    document.getElementById('modal-overlay').style.display='none';
+                    if(navigator.vibrate)navigator.vibrate(80);
+                }
+            ">
             <button class="btn btn-primary" style="margin-top:8px;width:100%" onclick="
-                const v = document.getElementById('pf-bc-manual').value.trim();
-                if(v){ document.getElementById('pf-barcode').value=v; _updateBarcodeHint(); document.getElementById('modal-overlay').style.display='none'; }
+                const v = (document.getElementById('pf-bc-manual').value||'').replace(/\\D/g,'');
+                if(v){ stopStream(); document.getElementById('pf-barcode').value=v; _updateBarcodeHint(); document.getElementById('modal-overlay').style.display='none'; }
             ">${t('scanner.barcode_use_btn')}</button>
         </div>
     `;
@@ -5660,8 +5825,11 @@ async function scanBarcodeForForm() {
                 const barcodes = await detector.detect(video);
                 if (barcodes.length > 0) {
                     const code = barcodes[0].rawValue;
+                    const fmt = barcodes[0].format;
                     detectionHistory[code] = (detectionHistory[code] || 0) + 1;
-                    if (detectionHistory[code] >= 2) {
+                    // EAN/UPC: confirm immediately (checksum-validated by detector)
+                    const highConf = ['ean_13','ean_8','upc_a','upc_e'].includes(fmt);
+                    if (highConf || detectionHistory[code] >= 2) {
                         scanning = false;
                         stopStream();
                         overlayEl.style.display = 'none';
@@ -5936,6 +6104,9 @@ function showProductAction() {
                 <button class="btn btn-huge btn-edit" onclick="openInventoryEdit()">
                     <span class="btn-icon">✏️</span>
                     <span class="btn-text">${t('product.modify_details')}<br><small>${t('action.edit_sub')}</small></span>
+                </button>
+                <button class="btn btn-recipe-from-ingredient" onclick="generateRecipeForIngredient(${JSON.stringify(currentProduct.name)})">
+                    👨‍🍳 ${t('action.create_recipe_btn') || 'Crea una ricetta'}
                 </button>
             `;
             // Secondary: catalog edit link below the buttons (one instance only)
@@ -6632,7 +6803,7 @@ async function _fetchExpiryHistoryAndUpdate(productId) {
             let days = isVacuum ? getVacuumExpiryDays(data.avg_days) : data.avg_days;
             const newDate = addDays(days);
             const newLabel = formatEstimatedExpiry(days);
-            const suffix = ` <span class="history-badge" title="Media da ${data.count} insertiment${data.count === 1 ? 'o' : 'i'} precedent${data.count === 1 ? 'e' : 'i'}">📊 storico</span>`;
+            const suffix = ` <span class="history-badge" title="${t('add.history_badge_tip').replace('{n}', data.count)}">📊 storico</span>`;
             const expiryInput = document.getElementById('add-expiry');
             const estimateEl = document.querySelector('.expiry-estimate-label');
             const dateEl = document.querySelector('.expiry-estimate-date');
@@ -6833,7 +7004,7 @@ function selectPurchaseType(btn, type) {
         const estimatedDate = addDays(days);
         const estimateLabel = formatEstimatedExpiry(days);
         let suffix = '';
-        if (window._historyExpiryDays) suffix = ` <span class="history-badge" title="Media da ${window._historyExpiryCount} inserimento/i precedente/i">📊 storico</span>`;
+        if (window._historyExpiryDays) suffix = ` <span class="history-badge" title="${t('add.history_badge_tip').replace('{n}', window._historyExpiryCount)}">📊 storico</span>`;
         else if (loc === 'freezer' && isVacuum) suffix = ' ' + t('add.suffix_freezer_vacuum');
         else if (loc === 'freezer') suffix = ' ' + t('add.suffix_freezer');
         else if (isVacuum) suffix = ' ' + t('add.suffix_vacuum');
@@ -7429,7 +7600,7 @@ function setPzFraction(frac) {
 function isLowStock(totalRemaining, unit, defaultQty) {
     if (totalRemaining <= 0) return true; // fully depleted → definitely needs restocking
     if (unit === 'pz') return totalRemaining <= 1; // only 1 piece left
-    if (unit === 'conf') return totalRemaining < 1; // only warn when less than 1 full pack remains (opened/partial)
+    if (unit === 'conf') return totalRemaining < 0.25; // warn when less than 25% of a package remains
     // Weight/volume: use percentage of default_qty or fixed threshold
     if (defaultQty > 0) return totalRemaining <= defaultQty * 0.25;
     // Fallback fixed thresholds
@@ -7498,6 +7669,67 @@ function _matchBringToSmart(bringName, smartItems) {
     return null;
 }
 
+/**
+ * Show a small auto-dismissing bottom bar asking the user if the opened product
+ * was put under vacuum seal. Auto-confirms after DURATION ms with the default value
+ * (if it was already vacuum sealed → default yes, otherwise → default no).
+ * @param {number} openedId  - inventory row ID of the opened item
+ * @param {number|boolean} wasVacuumSealed - previous vacuum_sealed state (0/1)
+ */
+function _showVacuumPrompt(openedId, wasVacuumSealed) {
+    const DURATION = 8000;
+    const defaultYes = !!wasVacuumSealed;
+
+    const old = document.getElementById('_vacuum-prompt');
+    if (old) old.remove();
+
+    const bar = document.createElement('div');
+    bar.id = '_vacuum-prompt';
+    bar.style.cssText = [
+        'position:fixed', 'bottom:80px', 'left:50%', 'transform:translateX(-50%)',
+        'z-index:9999', 'background:#1e293b', 'color:#fff', 'border-radius:14px',
+        'padding:12px 16px', 'display:flex', 'align-items:center', 'gap:10px',
+        'box-shadow:0 4px 24px rgba(0,0,0,0.5)', 'max-width:360px',
+        'width:calc(100% - 32px)', 'box-sizing:border-box', 'overflow:hidden'
+    ].join(';');
+    bar.innerHTML = `
+        <span style="flex:1;font-size:0.9rem;line-height:1.3">🔒 Messo <b>sotto vuoto</b>?</span>
+        <button id="_vac-yes" style="background:#22c55e;color:#fff;border:none;border-radius:8px;padding:7px 14px;font-weight:700;cursor:pointer;white-space:nowrap">Sì</button>
+        <button id="_vac-no" style="background:#475569;color:#fff;border:none;border-radius:8px;padding:7px 14px;font-weight:700;cursor:pointer;white-space:nowrap">No</button>
+        <div id="_vac-bar" style="position:absolute;bottom:0;left:0;height:3px;background:#60a5fa;border-radius:0;width:100%"></div>
+    `;
+    document.body.appendChild(bar);
+
+    let dismissed = false;
+    let rafH = null;
+    let timerH = null;
+
+    function dismiss(vacuum) {
+        if (dismissed) return;
+        dismissed = true;
+        if (timerH) clearTimeout(timerH);
+        if (rafH) cancelAnimationFrame(rafH);
+        bar.remove();
+        api('inventory_update', {}, 'POST', { id: openedId, vacuum_sealed: vacuum ? 1 : 0 })
+            .then(() => { if (vacuum) showToast('🔒 Sotto vuoto registrato', 'success'); })
+            .catch(() => {});
+    }
+
+    bar.querySelector('#_vac-yes').addEventListener('click', () => dismiss(true));
+    bar.querySelector('#_vac-no').addEventListener('click', () => dismiss(false));
+
+    const barEl = bar.querySelector('#_vac-bar');
+    const start = performance.now();
+    function tick() {
+        if (dismissed) return;
+        const pct = Math.min(100, (performance.now() - start) / DURATION * 100);
+        if (barEl) barEl.style.width = (100 - pct) + '%';
+        if (pct < 100) rafH = requestAnimationFrame(tick);
+    }
+    rafH = requestAnimationFrame(tick);
+    timerH = setTimeout(() => dismiss(defaultYes), DURATION);
+}
+
 function showLowStockBringPrompt(result, afterCallback) {
     const name = result.product_name || currentProduct?.name || '';
     // Generic shopping name (e.g. "Affettato" for "Mortadella IGP"). Falls back to
@@ -7515,8 +7747,8 @@ function showLowStockBringPrompt(result, afterCallback) {
         // configured, or product already on list), silently attempt it from JS.
         if (!result.added_to_bring && shoppingName) {
             // Fire-and-forget — don't block the callback
-            // Use generic shopping name; specific name goes into specification.
-            const spec = shoppingName !== name ? name + (result.product_brand ? ` · ${result.product_brand}` : '') : '';
+            // Use generic shopping name; specific name + 🛒 marker in spec so cron cleanup can auto-remove.
+            const spec = (shoppingName !== name ? name + (result.product_brand ? ` · ${result.product_brand}` : '') : name) + ' · 🛒 Esaurito';
             (async () => {
                 try {
                     const payload = { items: [{ name: shoppingName, specification: spec }] };
@@ -7665,17 +7897,20 @@ function startMoveModalCountdown(btnId, onExpire) {
     }, duration);
 }
 
-function showMoveAfterUseModal(product, fromLoc, remaining, openedId) {
+function showMoveAfterUseModal(product, fromLoc, remaining, openedId, openedVacuumSealed, unit) {
     const otherLocs = Object.entries(LOCATIONS).filter(([k]) => k !== fromLoc);
     const locButtons = otherLocs.map(([k, v]) =>
         `<button type="button" class="loc-btn" onclick="clearMoveModalTimer();confirmMoveAfterUse(${product.id}, '${fromLoc}', '${k}', ${openedId || 0})">${v.icon} ${v.label}</button>`
     ).join('');
-    const wasVacuum = !!product.vacuum_sealed;
-    const vacuumRow = wasVacuum ? `
+    // Show vacuum checkbox for any container-type unit or if the item was previously vacuum sealed.
+    // Pre-checked when it was already sealed (semi-automatic: if you sealed it last time, you likely will again).
+    const wasVacuum = !!(openedVacuumSealed ?? product.vacuum_sealed);
+    // Always offer vacuum sealing: any leftover food can be vacuum sealed regardless of unit type.
+    const vacuumRow = `
         <label style="display:flex;align-items:center;gap:8px;margin-top:12px;cursor:pointer">
-            <input type="checkbox" id="move-vacuum-check" checked>
-            <span>${t('move.vacuum_restore')}</span>
-        </label>` : '';
+            <input type="checkbox" id="move-vacuum-check" ${wasVacuum ? 'checked' : ''}>
+            <span>🔒 Metti <b>sotto vuoto</b> il resto${wasVacuum ? ' (era già sigillato)' : ''}</span>
+        </label>`;
     document.getElementById('modal-content').innerHTML = `
         <div class="modal-header">
             <h3>${t('move.title')}</h3>
@@ -7685,11 +7920,24 @@ function showMoveAfterUseModal(product, fromLoc, remaining, openedId) {
             <p style="margin-bottom:12px">${t('move.question').replace('{thing}', openedId ? t('move.thing_opened') : t('move.thing_rest')).replace('{name}', `<strong>${escapeHtml(product.name)}</strong>`)}</p>
             <div class="location-selector">${locButtons}</div>
             ${vacuumRow}
-            <button type="button" id="btn-move-stay" class="btn btn-secondary full-width move-countdown-btn" style="margin-top:12px" onclick="clearMoveModalTimer();closeModal();showPage('dashboard')">${t('move.stay_btn').replace('{location}', LOCATIONS[fromLoc]?.label || fromLoc)}</button>
+            <button type="button" id="btn-move-stay" class="btn btn-secondary full-width move-countdown-btn" style="margin-top:12px" onclick="clearMoveModalTimer();_saveVacuumAndStay(${openedId || 0});">${t('move.stay_btn').replace('{location}', LOCATIONS[fromLoc]?.label || fromLoc)}</button>
         </div>
     `;
     document.getElementById('modal-overlay').style.display = 'flex';
-    startMoveModalCountdown('btn-move-stay', () => { closeModal(); showPage('dashboard'); });
+    startMoveModalCountdown('btn-move-stay', () => { _saveVacuumAndStay(openedId || 0); });
+}
+
+/** Save vacuum state when user chooses to keep the item at the current location. */
+async function _saveVacuumAndStay(openedId) {
+    closeModal();
+    if (openedId) {
+        const isVacuum = document.getElementById('move-vacuum-check')?.checked ? 1 : 0;
+        try {
+            await api('inventory_update', {}, 'POST', { id: openedId, vacuum_sealed: isVacuum });
+            if (isVacuum) showToast('🔒 Sotto vuoto registrato', 'success');
+        } catch (_) {}
+    }
+    showPage('dashboard');
 }
 
 async function confirmMoveAfterUse(productId, fromLoc, toLoc, openedId) {
@@ -7921,10 +8169,11 @@ async function submitUse(e) {
             // If there's remaining quantity, offer to move to another location
             const usedFrom = document.getElementById('use-location').value;
             _recordUseLocationChoice(currentProduct.id, usedFrom); // track for preferred-location feature
+            const _vacUnit = result.product_unit || currentProduct?.unit || '';
             const moveCallback = result.remaining > 0
-                ? () => showMoveAfterUseModal(currentProduct, usedFrom, result.remaining, result.opened_id)
+                ? () => showMoveAfterUseModal(currentProduct, usedFrom, result.remaining, result.opened_id, result.opened_vacuum_sealed ?? 0, _vacUnit)
                 : () => showPage('dashboard');
-            // Check low stock → Bring! prompt
+            // Check low stock → Bring! prompt, then move/vacuum modal
             showLowStockBringPrompt(result, moveCallback);
         } else if (result.duplicate) {
             // Silently ignore: this was a scale double-trigger, not a real error
@@ -8099,7 +8348,7 @@ async function analyzeWithAI() {
 
         // Option to save as-is without barcode
         html += `<div style="margin-top:16px; border-top: 1px solid var(--bg-light); padding-top: 12px">`;
-        html += `<button class="btn btn-secondary full-width" onclick="saveAIProductDirect()">🆕 Non è nessuno di questi — salva come nuovo</button>`;
+        html += `<button class="btn btn-secondary full-width" onclick="saveAIProductDirect()">${t('scanner.save_new_btn')}</button>`;
         html += `</div>`;
 
         resultDiv.innerHTML = html;
@@ -8894,6 +9143,12 @@ async function fetchAllPrices(forceRefresh = false) {
         if (refreshBtn) { refreshBtn.disabled = false; refreshBtn.textContent = '🔄'; }
         return;
     }
+    if (!_geminiAvailable) {
+        // AI not configured — prices cannot be estimated without Gemini
+        if (fetchBtn) fetchBtn.disabled = false;
+        if (refreshBtn) { refreshBtn.disabled = false; refreshBtn.textContent = '🔄'; }
+        return;
+    }
 
     _pricesFetching = true;
 
@@ -8995,90 +9250,100 @@ async function fetchAllPrices(forceRefresh = false) {
  * Items not matching any DB product are left untouched (likely manually added by user).
  */
 async function cleanupObsoleteBringItems() {
-    // Run at most once every 30 minutes
+    // Rate-limit: run at most once every 3 minutes
     const lastCleanup = parseInt(localStorage.getItem('_bringCleanupTs') || '0');
-    if (Date.now() - lastCleanup < 30 * 60 * 1000) return;
+    if (Date.now() - lastCleanup < 3 * 60 * 1000) return;
     localStorage.setItem('_bringCleanupTs', String(Date.now()));
     if (!shoppingItems.length || !smartShoppingItems.length) return;
 
-    // Load live inventory (has actual quantities unlike products_list)
+    // Detect items added by the app vs manually by the user.
+    // Items added by the app always have urgency markers in their spec (⚡ / 🟠 / 🛒).
+    // This detection works across ALL clients — no localStorage dependency.
+    const APP_SPEC_MARKERS = ['⚡', '🟠', '🛒'];
+    const isAppAdded = (item) => {
+        const spec = item.specification || '';
+        // Also trust the legacy localStorage list as secondary signal
+        const autoAdded = _getAutoAddedBring();
+        const nameLow = item.name.toLowerCase();
+        const hasMarker = APP_SPEC_MARKERS.some(m => spec.includes(m));
+        const inLegacyMap = !!(autoAdded[nameLow] ||
+            Object.keys(autoAdded).some(k => _nameTokens(k)[0] === (_nameTokens(item.name)[0] || '')));
+        return hasMarker || inLegacyMap;
+    };
+
+    // Build shopping_name family → total stock from smart_shopping (server already computed this)
+    // If smart says a family is NOT needed, it already excluded them.
+    const smartShoppingNames = new Set(
+        smartShoppingItems.flatMap(si => [
+            si.name?.toLowerCase(),
+            si.shopping_name?.toLowerCase()
+        ].filter(Boolean))
+    );
+    const smartShoppingFirstToks = new Map();
+    for (const si of smartShoppingItems) {
+        for (const tok of _nameTokens(si.name || '')) {
+            if (!smartShoppingFirstToks.has(tok)) smartShoppingFirstToks.set(tok, si);
+        }
+        if (si.shopping_name) {
+            for (const tok of _nameTokens(si.shopping_name)) {
+                if (!smartShoppingFirstToks.has(tok)) smartShoppingFirstToks.set(tok, si);
+            }
+        }
+    }
+
+    // Load live inventory from server for stock check
     let invItems = [];
     try {
         const res = await api('inventory_list');
         invItems = res.inventory || [];
     } catch (e) { return; }
 
-    // Build: every significant token of in-stock products → total qty
-    // Any-token matching groups product families:
-    // 'Passata di pomodoro' + 'Polpa di pomodoro' share 'pomodoro' → same need
-    const stockByAnyToken = new Map();
+    // stock by any token (name) + by shopping_name
+    const stockByTok = new Map();
+    const stockBySName = new Map();
     for (const inv of invItems) {
         const qty = parseFloat(inv.quantity || 0);
-        if (qty <= 0) continue;
+        const expiry = inv.expiry_date;
+        const expired = expiry && new Date(expiry) < new Date();
+        if (qty <= 0 || expired) continue;
         for (const tok of _nameTokens(inv.name || '')) {
-            stockByAnyToken.set(tok, (stockByAnyToken.get(tok) || 0) + qty);
+            stockByTok.set(tok, (stockByTok.get(tok) || 0) + qty);
         }
+        const sn = (inv.shopping_name || '').toLowerCase().trim();
+        if (sn) stockBySName.set(sn, (stockBySName.get(sn) || 0) + qty);
     }
-
-    // Build: first token of smart item name → smart item
-    const smartByFirstToken = new Map();
-    for (const si of smartShoppingItems) {
-        const first = _nameTokens(si.name)[0];
-        if (first && !smartByFirstToken.has(first)) smartByFirstToken.set(first, si);
-        // Also index shopping_name first token
-        if (si.shopping_name) {
-            const sFirst = _nameTokens(si.shopping_name)[0];
-            if (sFirst && !smartByFirstToken.has(sFirst)) smartByFirstToken.set(sFirst, si);
-        }
-    }
-
-    // User-pinned: items manually added via any path — never auto-remove
-    let userPinned;
-    try {
-        const raw = localStorage.getItem('_userPinnedBring');
-        const map = raw ? JSON.parse(raw) : {};
-        const now = Date.now();
-        let changed = false;
-        for (const k of Object.keys(map)) {
-            if (now - map[k] > 30 * 24 * 60 * 60 * 1000) { delete map[k]; changed = true; }
-        }
-        if (changed) localStorage.setItem('_userPinnedBring', JSON.stringify(map));
-        userPinned = map;
-    } catch(e) { userPinned = {}; }
-
-    // Auto-added set: only items the app itself auto-added are candidates for cleanup
-    const autoAdded = _getAutoAddedBring();
 
     const toRemove = [];
     for (const item of shoppingItems) {
         const nameLower = item.name.toLowerCase();
-        const itemFirst = _nameTokens(item.name)[0];
+        const itemToks = _nameTokens(item.name);
+        const itemFirst = itemToks[0];
 
-        // Safety: only clean up items the app auto-added — NEVER remove manually-added ones
-        const isAutoAdded = !!(autoAdded[nameLower] ||
-            (itemFirst && Object.keys(autoAdded).some(k => _nameTokens(k)[0] === itemFirst)));
-        if (!isAutoAdded) continue;
+        // Only remove items the app put there
+        if (!isAppAdded(item)) continue;
 
-        // User explicitly pinned this item → skip
-        if (userPinned[nameLower]) continue;
+        // Find matching smart item
+        const smartSi = itemFirst ? smartShoppingFirstToks.get(itemFirst) : undefined;
 
-        // Find smart item by first-token match (strict — avoids "latte" matching "latte di soia")
-        const smartSi = itemFirst ? smartByFirstToken.get(itemFirst) : undefined;
-
-        // Smart still considers this critical or high urgency → keep it on the list
+        // Smart still flags this as critical or high → keep it
         if (smartSi && (smartSi.urgency === 'critical' || smartSi.urgency === 'high')) continue;
-
-        // Out of stock → the user still needs to buy it, keep it
+        // Smart says medium AND low stock → keep it
+        if (smartSi && smartSi.urgency === 'medium' && (smartSi.pct_left ?? 100) < 60) continue;
+        // Smart has it with 0 qty → keep it (user genuinely needs it)
         if (smartSi && (smartSi.current_qty ?? 0) <= 0) continue;
 
-        // Smart predicts medium urgency AND stock < 60% → keep it
-        if (smartSi && smartSi.urgency === 'medium' && (smartSi.pct_left ?? 100) < 60) continue;
+        // If the item IS still in smart_shopping (but not urgent) AND has no local stock at all,
+        // give benefit of the doubt and keep it.
+        // If the item is NOT in smart_shopping at all → trust the server: it's covered → remove.
+        if (smartSi) {
+            // Still in smart_shopping (low urgency): verify some stock exists before removing
+            const hasStock = itemToks.some(tok => (stockByTok.get(tok) || 0) > 0)
+                || (stockBySName.get(nameLower) || 0) > 0;
+            if (!hasStock) continue;
+        }
+        // else: not in smart_shopping at all → server decided it's covered → safe to remove
 
-        // Check actual inventory stock for this exact item (first-token match)
-        const stockQty = itemFirst ? (stockByAnyToken.get(itemFirst) || 0) : 0;
-        if (stockQty <= 0) continue; // no related stock → don't remove
-
-        // All guards passed: item is auto-added, stock is sufficient, not urgently needed
+        // All guards passed: app-added and not urgently needed → remove from Bring!
         toRemove.push(item);
     }
 
@@ -9112,10 +9377,13 @@ async function cleanupObsoleteBringItems() {
 function logOperation(action, details) {
     try {
         const log = JSON.parse(localStorage.getItem('_opLog') || '[]');
-        log.push({ ts: new Date().toISOString(), action, details });
-        // Keep last 200 entries
-        if (log.length > 200) log.splice(0, log.length - 200);
-        localStorage.setItem('_opLog', JSON.stringify(log));
+        const now = Date.now();
+        log.push({ ts: new Date(now).toISOString(), action, details });
+        // Prune: keep only last 200 entries AND entries newer than 30 days
+        const cutoff = now - 30 * 24 * 60 * 60 * 1000;
+        const pruned = log.filter(e => new Date(e.ts).getTime() >= cutoff);
+        const final = pruned.length > 200 ? pruned.slice(pruned.length - 200) : pruned;
+        localStorage.setItem('_opLog', JSON.stringify(final));
     } catch (e) { /* ignore */ }
 }
 
@@ -9248,7 +9516,7 @@ function _renderSmartLastUpdate() {
     const el = document.getElementById('smart-last-update');
     if (!el || !_smartShoppingLastFetch) return;
     const d = new Date(_smartShoppingLastFetch);
-    el.textContent = `Aggiornato ${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`;
+    el.textContent = t('shopping.smart_last_update').replace('{time}', `${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`);
 }
 
 function startBgShoppingRefresh() {
@@ -9468,7 +9736,7 @@ async function migrateBringNames(btn) {
                 showToast(`🔄 ${data.migrated} nomi generalizzati in Bring!`, 'success');
                 loadShoppingList(); // refresh the shopping list view
             } else {
-                showToast('Tutti i nomi sono già aggiornati', 'info');
+                showToast(t('shopping.names_already_updated'), 'info');
             }
         } else {
             if (statusEl) statusEl.textContent = '❌ ' + (data.error || 'Errore');
@@ -9559,19 +9827,15 @@ async function loadShoppingCount() {
             el.classList.remove('stat-loading');
         }
     }
-    // Smart urgency badge: use cached data if fresh (< 2 min), else fetch
-    if (smartShoppingItems.length > 0 && (Date.now() - _smartShoppingLastFetch) < 2 * 60 * 1000) {
-        _updateSmartUrgencyBadge();
-    } else {
-        try {
-            const smart = await api('smart_shopping');
-            if (smart.success && smart.items) {
-                smartShoppingItems = smart.items;
-                _smartShoppingLastFetch = Date.now();
-                _updateSmartUrgencyBadge();
-            }
-        } catch { /* ignore */ }
-    }
+    // Smart urgency badge: always fetch fresh data from server (no browser-side gate)
+    try {
+        const smart = await api('smart_shopping');
+        if (smart.success && smart.items) {
+            smartShoppingItems = smart.items;
+            _smartShoppingLastFetch = Date.now();
+            _updateSmartUrgencyBadge();
+        }
+    } catch { /* ignore */ }
     _updateDashboardPriceTotal();
 }
 
@@ -10988,7 +11252,16 @@ async function useRecipeIngredient(idx, productId, location, qtyNumber, btn, rec
     
     _recipeUseContext = { idx, productId, btn, qtyNumber, recipeQty };
     _recipeUseConfMode = null;
-    
+
+    // Reset scale state: set the current weight as baseline so only a *change*
+    // of ≥5g after the modal opens triggers auto-fill (allows time to tare).
+    _cancelScaleAutoConfirm(false);
+    _scaleRecipeAutoFillPaused = false;
+    if (_scaleLatestWeight) {
+        const _baseline = _scaleToGrams(parseFloat(_scaleLatestWeight.value), _scaleLatestWeight.unit);
+        if (_baseline !== null && _baseline >= 5) _scaleLastConfirmedGrams = _baseline;
+    }
+
     // Fetch inventory to build the modal
     try {
         const data = await api('inventory_list');
@@ -11250,11 +11523,11 @@ function showRecipeMoveModal(productId, fromLoc, remaining, openedId, wasVacuum)
     const locButtons = otherLocs.map(([k, v]) =>
         `<button type="button" class="loc-btn" onclick="clearMoveModalTimer();confirmRecipeMove(${productId}, '${fromLoc}', '${k}', ${openedId || 0})">${v.icon} ${v.label}</button>`
     ).join('');
-    const vacuumRow = wasVacuum ? `
+    const vacuumRow = `
         <label style="display:flex;align-items:center;gap:8px;margin-top:12px;cursor:pointer">
-            <input type="checkbox" id="move-vacuum-check" checked>
-            <span>${t('move.vacuum_restore')}</span>
-        </label>` : '';
+            <input type="checkbox" id="move-vacuum-check" ${wasVacuum ? 'checked' : ''}>
+            <span>${wasVacuum ? t('move.vacuum_restore') : '🔒 Metti <b>sotto vuoto</b> il resto'}</span>
+        </label>`;
     document.getElementById('modal-content').innerHTML = `
         <div class="modal-header">
             <h3>${t('move.title')}</h3>
@@ -11312,7 +11585,7 @@ function renderRecipe(r) {
 
     // Meta tags
     html += '<div class="recipe-meta">';
-    html += `<span class="recipe-tag">${_mealLabel(r.meal)}</span>`;
+    if (r.meal) html += `<span class="recipe-tag">${_mealLabel(r.meal)}</span>`;
     html += `<span class="recipe-tag">👥 ${r.persons} ${t('recipes.persons_short')}</span>`;
     if (r.prep_time) html += `<span class="recipe-tag">🔪 ${r.prep_time}</span>`;
     if (r.cook_time) html += `<span class="recipe-tag">🔥 ${r.cook_time}</span>`;
@@ -12256,6 +12529,87 @@ function sendChatSuggestion(text) {
     sendChatMessage();
 }
 
+/** Returns true if a chat reply looks like it contains a recipe with ingredients */
+function _looksLikeRecipe(text) {
+    // Must have an "Ingredienti" section header AND a step/preparation section
+    const hasIngredients = /ingredi[e|ë]nti/i.test(text);
+    const hasPreparation = /preparazi[o|ó]ne|procedimento|istruzioni|passaggi|how to|steps|zubereitung/i.test(text);
+    const hasStepNumbers = /^\d+[\.\)]/m.test(text);
+    return hasIngredients && (hasPreparation || hasStepNumbers);
+}
+
+async function chatTransferToRecipes(btn, replyText) {
+    btn.disabled = true;
+    btn.textContent = '⏳ ' + (t('chat.transferring') || 'Trasferimento in corso...');
+    const resetBtn = () => {
+        btn.disabled = false;
+        btn.textContent = '📥 ' + (t('chat.transfer_to_recipes') || 'Trasferisci a Ricette');
+    };
+    try {
+        const settings = getSettings();
+        const result = await api('chat_to_recipe', {}, 'POST', {
+            text: replyText,
+            lang: settings.lang || 'it'
+        });
+        if (!result || !result.success || !result.recipe) {
+            resetBtn();
+            showToast('⚠️ ' + (result?.error || t('error.generic') || 'Errore'), 'error');
+            return;
+        }
+        const recipe = result.recipe;
+        // renderRecipe expects `persons`; Gemini might return `servings`
+        if (!recipe.persons && recipe.servings) recipe.persons = recipe.servings;
+        if (!recipe.persons) recipe.persons = 2;
+        await saveRecipeToArchive(recipe);
+        _cachedRecipe = { meal: recipe.meal || '', recipe };
+        renderRecipe(recipe);
+        // Transform the transfer button into "Apri la ricetta"
+        btn.disabled = false;
+        btn.textContent = '📖 ' + (t('chat.open_recipe') || 'Apri la ricetta');
+        btn.onclick = () => {
+            document.getElementById('recipe-overlay').style.display = 'flex';
+            document.getElementById('recipe-ask').style.display = 'none';
+            document.getElementById('recipe-loading').style.display = 'none';
+            document.getElementById('recipe-result').style.display = '';
+        };
+        showToast('✅ ' + (t('chat.transferred') || 'Aggiunta alle Ricette!'), 'success');
+    } catch (err) {
+        console.error('[chatTransferToRecipes]', err);
+        resetBtn();
+        showToast('⚠️ ' + (err.message || t('error.connection') || 'Errore di connessione'), 'error');
+    }
+}
+
+async function generateRecipeForIngredient(ingredientName) {
+    if (!_requireGemini()) return;
+    document.getElementById('recipe-overlay').style.display = 'flex';
+    document.getElementById('recipe-ask').style.display = 'none';
+    document.getElementById('recipe-loading').style.display = '';
+    document.getElementById('recipe-result').style.display = 'none';
+    const loadingMsg = document.getElementById('recipe-loading-msg');
+    if (loadingMsg) loadingMsg.textContent = '👨‍🍳 ' + (t('recipes.loading_msg') || 'Sto preparando la ricetta...');
+    try {
+        const result = await api('recipe_from_ingredient', {}, 'POST', { ingredient: ingredientName });
+        if (!result || !result.success || !result.recipe) {
+            document.getElementById('recipe-overlay').style.display = 'none';
+            showToast('⚠️ ' + (result?.error || t('error.generic') || 'Errore'), 'error');
+            return;
+        }
+        const recipe = result.recipe;
+        if (!recipe.persons && recipe.servings) recipe.persons = recipe.servings;
+        if (!recipe.persons) recipe.persons = 2;
+        await saveRecipeToArchive(recipe);
+        _cachedRecipe = { meal: recipe.meal || '', recipe };
+        renderRecipe(recipe);
+        document.getElementById('recipe-loading').style.display = 'none';
+        document.getElementById('recipe-result').style.display = '';
+    } catch (err) {
+        console.error('[generateRecipeForIngredient]', err);
+        document.getElementById('recipe-overlay').style.display = 'none';
+        showToast('⚠️ ' + (t('error.connection') || 'Errore di connessione'), 'error');
+    }
+}
+
 async function sendChatMessage() {
     const input = document.getElementById('chat-input');
     const text = input.value.trim();
@@ -12295,6 +12649,17 @@ async function sendChatMessage() {
         if (result.success) {
             chatHistory.push({ role: 'gemini', text: result.reply });
             appendChatBubble('gemini', formatChatReply(result.reply));
+            // If reply looks like a recipe, add transfer button as SEPARATE element below bubble
+            if (_looksLikeRecipe(result.reply)) {
+                const replyText = result.reply;
+                const container = document.getElementById('chat-messages');
+                const transferBtn = document.createElement('button');
+                transferBtn.className = 'btn-chat-use-recipe';
+                transferBtn.textContent = '📥 ' + (t('chat.transfer_to_recipes') || 'Trasferisci a Ricette');
+                transferBtn.onclick = () => chatTransferToRecipes(transferBtn, replyText);
+                container.appendChild(transferBtn);
+                scrollChatBottom();
+            }
         } else {
             const errMsg = result.error === 'no_api_key' ? 'Configura la chiave API Gemini nelle impostazioni.' : (result.error || 'Errore nella risposta');
             appendChatBubble('gemini', `⚠️ ${escapeHtml(errMsg)}`);
@@ -12594,21 +12959,21 @@ function _renderScreensaverNutrition() {
 
     el.innerHTML = `
     <div class="ss-nutr-wrap">
-        <div class="ss-nutr-title">🥗 La tua dispensa oggi</div>
+        <div class="ss-nutr-title">${t('nutrition.today_title')}</div>
         <div class="ss-nutr-charts">
             <!-- Main category pie -->
             <div class="ss-nutr-chart-block">
                 <div class="ss-pie3d" id="ss-pie-main" style="--pie-bg:${gradient}"></div>
-                <div class="ss-nutr-chart-label">${total} prodotti</div>
+                <div class="ss-nutr-chart-label">${t('nutrition.products_n').replace('{n}', total)}</div>
                 <div class="ss-nutr-legend">
                     ${top4.map(s => `<div class="ss-leg-row"><span style="background:${s.color}" class="ss-leg-dot"></span><span>${s.icon} ${s.cat}</span><span class="ss-leg-pct">${s.pct}%</span></div>`).join('')}
                 </div>
             </div>
             <!-- Score donuts -->
             <div class="ss-nutr-scores-col">
-                ${_ssDonut('❤️ Salute', healthScore, healthColor)}
-                ${_ssDonut('🎨 Varietà', varietyScore, varColor)}
-                ${_ssDonut('❄️ Freschi', fresh_pct, freshColor)}
+                ${_ssDonut(t('nutrition.label_health'), healthScore, healthColor)}
+                ${_ssDonut(t('nutrition.label_variety'), varietyScore, varColor)}
+                ${_ssDonut(t('nutrition.label_fresh'), fresh_pct, freshColor)}
             </div>
         </div>
     </div>`;
@@ -12713,7 +13078,7 @@ function generateScreensaverFact() {
     }
 
     // Greeting based on time
-    const greeting = hour < 12 ? 'Buongiorno' : hour < 18 ? 'Buon pomeriggio' : 'Buonasera';
+    const greeting = hour < 12 ? t('facts.greeting_morning') : hour < 18 ? t('facts.greeting_afternoon') : t('facts.greeting_evening');
 
     // Random item picker
     const rItem = (arr) => arr.length ? arr[Math.floor(Math.random() * arr.length)] : null;
@@ -12723,10 +13088,11 @@ function generateScreensaverFact() {
 
     // --- Expired items facts ---
     if (expired.length > 0) {
-        facts.push(() => `Hai ${expired.length} ${expired.length === 1 ? 'prodotto scaduto' : 'prodotti scaduti'} in dispensa. Controlla!`);
+        facts.push(() => expired.length === 1 ? t('facts.expired_one') : t('facts.expired_many').replace('{n}', expired.length));
         facts.push(() => {
             const names = expired.slice(0, 3).map(i => i.name);
-            return `Prodotti scaduti: ${names.join(', ')}${expired.length > 3 ? ` e altri ${expired.length - 3}` : ''}`;
+            const extra = expired.length > 3 ? ` ${t('facts.expired_list_more').replace('{n}', expired.length - 3)}` : '';
+            return t('facts.expired_list').replace('{names}', names.join(', ') + extra);
         });
         const freezerExpired = expired.filter(i => i.location === 'freezer');
         if (freezerExpired.length > 0) {
@@ -12734,14 +13100,14 @@ function generateScreensaverFact() {
                 const item = rItem(freezerExpired);
                 const safety = getExpiredSafety(item, Math.abs(daysUntilExpiry(item.expiry_date)));
                 if (safety.level === 'ok' || safety.level === 'warning') {
-                    return `${item.name} è scaduto, ma essendo in freezer potrebbe essere ancora buono! Controlla.`;
+                    return t('facts.freezer_expired_ok').replace('{name}', item.name);
                 }
-                return `${item.name} in freezer è scaduto da troppo tempo. Meglio buttarlo.`;
+                return t('facts.freezer_expired_old').replace('{name}', item.name);
             });
         }
         const frigoExpired = expired.filter(i => i.location === 'frigo');
         if (frigoExpired.length > 0) {
-            facts.push(() => `Hai ${frigoExpired.length} ${frigoExpired.length === 1 ? 'prodotto scaduto' : 'prodotti scaduti'} in frigo!`);
+            facts.push(() => frigoExpired.length === 1 ? t('facts.fridge_expired_one') : t('facts.fridge_expired_many').replace('{n}', frigoExpired.length));
         }
     }
 
@@ -12750,48 +13116,48 @@ function generateScreensaverFact() {
         facts.push(() => {
             const item = expiringSoon[0];
             const days = daysUntilExpiry(item.expiry_date);
-            if (days === 0) return `${item.name} scade oggi! Usalo subito.`;
-            if (days === 1) return `${item.name} scade domani. Pensaci!`;
-            return `${item.name} scade tra ${days} giorni.`;
+            if (days === 0) return t('facts.expiring_today').replace('{name}', item.name);
+            if (days === 1) return t('facts.expiring_tomorrow').replace('{name}', item.name);
+            return t('facts.expiring_days').replace('{name}', item.name).replace('{days}', days);
         });
         if (expiringSoon.length > 1) {
-            facts.push(() => `Hai ${expiringSoon.length} prodotti in scadenza ravvicinata.`);
+            facts.push(() => t('facts.expiring_many').replace('{n}', expiringSoon.length));
         }
     }
     if (expiringThisWeek.length > 0) {
-        facts.push(() => `Questa settimana scadono ${expiringThisWeek.length} prodotti. Pianifica i pasti di conseguenza!`);
+        facts.push(() => t('facts.expiring_this_week').replace('{n}', expiringThisWeek.length));
         facts.push(() => {
             const item = rItem(expiringThisWeek);
             const days = daysUntilExpiry(item.expiry_date);
             const locLabel = LOCATIONS[item.location]?.label || item.location;
-            return `${item.name} (${locLabel}) scade tra ${days} ${days === 1 ? 'giorno' : 'giorni'}.`;
+            return t('facts.expiring_item_loc').replace('{name}', item.name).replace('{loc}', locLabel).replace('{days}', days).replace('{dayslabel}', days === 1 ? t('facts.day') : t('facts.days'));
         });
     }
     if (expiringThisMonth.length > 0) {
-        facts.push(() => `In questo mese scadranno ${expiringThisMonth.length} prodotti.`);
+        facts.push(() => t('facts.expiring_this_month').replace('{n}', expiringThisMonth.length));
     }
 
     // --- Shopping list facts (skip count/names — already shown in the shopping panel) ---
     if (shop.length > 0) {
         const names = shop.slice(0, 3).map(i => i.name).join(', ');
-        const extra = shop.length > 3 ? ` e altri ${shop.length - 3}` : '';
-        facts.push(() => `Metti in lista: ${names}${extra} 🛒`);
+        const extra = shop.length > 3 ? ` ${t('facts.shopping_more').replace('{n}', shop.length - 3)}` : '';
+        facts.push(() => t('facts.shopping_add').replace('{names}', names + extra));
     }
     if (shop.length === 0) {
-        facts.push(() => `Lista della spesa vuota. Tutto rifornito! ✅`);
+        facts.push(() => t('facts.shopping_empty'));
     }
 
     // --- Location-based facts ---
     if (inFrigo.length > 0) {
         facts.push(() => {
             const item = rItem(inFrigo);
-            return `In frigo c'è: ${item.name}${item.brand ? ' (' + item.brand + ')' : ''}.`;
+            return t('facts.in_fridge').replace('{name}', item.name + (item.brand ? ' (' + item.brand + ')' : ''));
         });
     }
     if (inFreezer.length > 0) {
         facts.push(() => {
             const item = rItem(inFreezer);
-            return `Nel freezer c'è: ${item.name}. Non dimenticartelo!`;
+            return t('facts.in_freezer').replace('{name}', item.name);
         });
     }
 
@@ -12803,37 +13169,37 @@ function generateScreensaverFact() {
             const top = sorted[0];
             const catLabel = top[0];
             const icon = CATEGORY_ICONS[catLabel] || '📦';
-            return `La categoria più presente è ${icon} ${catLabel} con ${top[1].length} prodotti.`;
+            return t('facts.top_category').replace('{icon}', icon).replace('{cat}', t('categories.' + catLabel) || catLabel).replace('{n}', top[1].length);
         });
         if (byCategory['carne'] && byCategory['carne'].length > 0) {
-            facts.push(() => `Hai ${byCategory['carne'].length} prodotti di carne. 🥩`);
+            facts.push(() => t('facts.cat_meat').replace('{n}', byCategory['carne'].length));
         }
         if (byCategory['latticini'] && byCategory['latticini'].length > 0) {
-            facts.push(() => `Hai ${byCategory['latticini'].length} latticini in casa. 🥛`);
+            facts.push(() => t('facts.cat_dairy').replace('{n}', byCategory['latticini'].length));
         }
         if (byCategory['verdura'] && byCategory['verdura'].length > 0) {
-            facts.push(() => `Hai ${byCategory['verdura'].length} tipi di verdura. Ottimo per la salute! 🥬`);
+            facts.push(() => t('facts.cat_veggies').replace('{n}', byCategory['verdura'].length));
         }
         if (byCategory['frutta'] && byCategory['frutta'].length > 0) {
-            facts.push(() => `Hai ${byCategory['frutta'].length} tipi di frutta. 🍎`);
+            facts.push(() => t('facts.cat_fruit').replace('{n}', byCategory['frutta'].length));
         }
         if (byCategory['bevande'] && byCategory['bevande'].length > 0) {
-            facts.push(() => `Hai ${byCategory['bevande'].length} bevande disponibili. 🥤`);
+            facts.push(() => t('facts.cat_drinks').replace('{n}', byCategory['bevande'].length));
         }
         if (byCategory['surgelati'] && byCategory['surgelati'].length > 0) {
-            facts.push(() => `Hai ${byCategory['surgelati'].length} surgelati nel freezer. ❄️`);
+            facts.push(() => t('facts.cat_frozen').replace('{n}', byCategory['surgelati'].length));
         }
         if (byCategory['pasta'] && byCategory['pasta'].length > 0) {
-            facts.push(() => `Hai ${byCategory['pasta'].length} tipi di pasta. 🍝 Che ne dici di una carbonara?`);
+            facts.push(() => t('facts.cat_pasta').replace('{n}', byCategory['pasta'].length));
         }
         if (byCategory['conserve'] && byCategory['conserve'].length > 0) {
-            facts.push(() => `Hai ${byCategory['conserve'].length} conserve in dispensa. 🥫`);
+            facts.push(() => t('facts.cat_canned').replace('{n}', byCategory['conserve'].length));
         }
         if (byCategory['snack'] && byCategory['snack'].length > 0) {
-            facts.push(() => `Hai ${byCategory['snack'].length} snack. Resisti alla tentazione! 🍪`);
+            facts.push(() => t('facts.cat_snacks').replace('{n}', byCategory['snack'].length));
         }
         if (byCategory['condimenti'] && byCategory['condimenti'].length > 0) {
-            facts.push(() => `Hai ${byCategory['condimenti'].length} condimenti a disposizione. 🧂`);
+            facts.push(() => t('facts.cat_condiments').replace('{n}', byCategory['condimenti'].length));
         }
     }
 
@@ -12841,16 +13207,16 @@ function generateScreensaverFact() {
     if (inv.length > 0) {
         facts.push(() => {
             const item = rItem(inv);
-            return `Lo sapevi? Hai ${item.name} in ${LOCATIONS[item.location]?.label || item.location}.`;
+            return t('facts.item_random').replace('{name}', item.name).replace('{loc}', LOCATIONS[item.location]?.label || item.location);
         });
         facts.push(() => {
             const item = rItem(inv);
             const qty = formatQuantity(item.quantity, item.unit, item.default_quantity, item.package_unit);
-            return `${item.name}: ne hai ${qty}.`;
+            return t('facts.item_qty').replace('{name}', item.name).replace('{qty}', qty);
         });
     }
     if (noExpiry.length > 0) {
-        facts.push(() => `${noExpiry.length} prodotti non hanno una data di scadenza impostata.`);
+        facts.push(() => t('facts.no_expiry_count').replace('{n}', noExpiry.length));
     }
     if (withExpiry.length > 0) {
         // Find the one expiring furthest away
@@ -12859,7 +13225,7 @@ function generateScreensaverFact() {
             return d > (best.d || 0) ? { item, d } : best;
         }, { d: 0 });
         if (furthest.item && furthest.d > 30) {
-            facts.push(() => `Il prodotto con scadenza più lontana è ${furthest.item.name}: ${Math.round(furthest.d / 30)} mesi.`);
+            facts.push(() => t('facts.furthest_expiry').replace('{name}', furthest.item.name).replace('{months}', Math.round(furthest.d / 30)));
         }
     }
 
@@ -12869,56 +13235,56 @@ function generateScreensaverFact() {
         facts.push(() => {
             const item = rItem(highQtyItems);
             const qty = formatQuantity(item.quantity, item.unit, item.default_quantity, item.package_unit);
-            return `Hai una bella scorta di ${item.name}: ${qty}!`;
+            return t('facts.high_qty').replace('{name}', item.name).replace('{qty}', qty);
         });
     }
     const lowQtyItems = inv.filter(i => parseFloat(i.quantity) <= 1 && parseFloat(i.quantity) > 0);
     if (lowQtyItems.length > 0) {
         facts.push(() => {
             const item = rItem(lowQtyItems);
-            return `${item.name} sta per finire. Aggiungilo alla spesa?`;
+            return t('facts.low_qty_item').replace('{name}', item.name);
         });
-        facts.push(() => `Ci sono ${lowQtyItems.length} prodotti quasi finiti.`);
+        facts.push(() => t('facts.low_qty_count').replace('{n}', lowQtyItems.length));
     }
 
     // --- Time-of-day greetings & suggestions ---
     if (hour >= 6 && hour < 10) {
-        if (byCategory['pane']) facts.push(() => `Buongiorno! Hai del pane per la colazione. 🍞`);
-        if (byCategory['latticini']) facts.push(() => `C'è del latte in frigo per il cappuccino? ☕🥛`);
-        if (byCategory['frutta']) facts.push(() => `Buongiorno! Una bella frutta fresca per iniziare bene. 🍎`);
+        if (byCategory['pane']) facts.push(() => t('facts.morning_bread'));
+        if (byCategory['latticini']) facts.push(() => t('facts.morning_milk'));
+        if (byCategory['frutta']) facts.push(() => t('facts.morning_fruit'));
     }
     if (hour >= 11 && hour < 14) {
-        if (byCategory['pasta']) facts.push(() => `Ora di pranzo… Un bel piatto di pasta? 🍝`);
-        if (byCategory['verdura']) facts.push(() => `Un'insalata fresca per pranzo? Hai ${byCategory['verdura'].length} verdure! 🥗`);
+        if (byCategory['pasta']) facts.push(() => t('facts.noon_pasta'));
+        if (byCategory['verdura']) facts.push(() => t('facts.noon_salad').replace('{n}', byCategory['verdura'].length));
     }
     if (hour >= 17 && hour < 21) {
-        if (byCategory['carne']) facts.push(() => `Per cena potresti usare la carne che hai. 🥩`);
-        if (byCategory['pesce']) facts.push(() => `Che ne dici di pesce per cena? 🐟`);
-        if (expiringThisWeek.length > 0) facts.push(() => `Hai ${expiringThisWeek.length} prodotti in scadenza questa settimana — usali stasera!`);
+        if (byCategory['carne']) facts.push(() => t('facts.evening_meat'));
+        if (byCategory['pesce']) facts.push(() => t('facts.evening_fish'));
+        if (expiringThisWeek.length > 0) facts.push(() => t('facts.evening_expiring').replace('{n}', expiringThisWeek.length));
     }
     if (hour >= 21 || hour < 6) {
-        if (expiringSoon.length > 0) facts.push(() => `Buonanotte! Domani ricordati di usare: ${expiringSoon.slice(0,2).map(i=>i.name).join(', ')}.`);
+        if (expiringSoon.length > 0) facts.push(() => t('facts.night_reminder').replace('{names}', expiringSoon.slice(0,2).map(i=>i.name).join(', ')));
     }
 
     // --- Weekly stats ---
     const recentIn = stats.recent_in || 0;
     const recentOut = stats.recent_out || 0;
     if (recentIn > 0 && recentOut > 0) {
-        facts.push(() => `Bilancio settimana: +${recentIn} aggiunti, −${recentOut} consumati.`);
+        facts.push(() => t('facts.weekly_balance').replace('{in}', recentIn).replace('{out}', recentOut));
     } else if (recentIn > 0) {
-        facts.push(() => `Questa settimana hai aggiunto ${recentIn} prodotti.`);
+        facts.push(() => t('facts.weekly_added').replace('{n}', recentIn));
     } else if (recentOut > 0) {
-        facts.push(() => `Questa settimana hai consumato ${recentOut} prodotti. Ottimo!`);
+        facts.push(() => t('facts.weekly_consumed').replace('{n}', recentOut));
     }
 
     // --- Tips & curiosità (statici ma ruotano) ---
-    facts.push(() => `💡 I prodotti in freezer durano molto più a lungo della data di scadenza.`);
-    facts.push(() => `💡 Il pane congelato mantiene la fragranza per settimane.`);
-    facts.push(() => `💡 Per evitare sprechi, usa prima i prodotti con scadenza più vicina (FIFO).`);
-    facts.push(() => `💡 La carne in freezer può durare fino a 6 mesi senza problemi.`);
-    facts.push(() => `💡 Non ricongelare mai un alimento già scongelato. Cucinalo subito!`);
-    facts.push(() => `💡 Un frigo ordinato ti fa risparmiare tempo e denaro.`);
-    facts.push(() => `💡 Le conserve aperte vanno in frigo e consumate in pochi giorni.`);
+    facts.push(() => t('facts.tip_freezer'));
+    facts.push(() => t('facts.tip_bread'));
+    facts.push(() => t('facts.tip_fifo'));
+    facts.push(() => t('facts.tip_meat'));
+    facts.push(() => t('facts.tip_no_refreeze'));
+    facts.push(() => t('facts.tip_fridge'));
+    facts.push(() => t('facts.tip_canned'));
 
     // --- Brand-based facts ---
     const brands = inv.filter(i => i.brand).map(i => i.brand);
@@ -12926,24 +13292,24 @@ function generateScreensaverFact() {
         const brandCount = {};
         brands.forEach(b => { brandCount[b] = (brandCount[b] || 0) + 1; });
         const topBrand = Object.entries(brandCount).sort((a, b) => b[1] - a[1])[0];
-        facts.push(() => `Il marca più presente nella tua dispensa è ${topBrand[0]} con ${topBrand[1]} prodotti.`);
+        facts.push(() => t('facts.top_brand').replace('{brand}', topBrand[0]).replace('{n}', topBrand[1]));
     }
 
     // --- Specific food combo facts ---
     if (byCategory['pasta'] && byCategory['condimenti']) {
-        facts.push(() => `Hai pasta e condimenti: sei pronto per un primo piatto! 🍝`);
+        facts.push(() => t('facts.combo_pasta'));
     }
     if (byCategory['pane'] && byCategory['carne']) {
-        facts.push(() => `Pane e carne: un panino veloce è sempre una buona idea! 🥪`);
+        facts.push(() => t('facts.combo_sandwich'));
     }
     if (byCategory['verdura'] && byCategory['carne']) {
-        facts.push(() => `Verdura e carne: hai tutto per un piatto equilibrato! 🥗🥩`);
+        facts.push(() => t('facts.combo_balanced'));
     }
 
     // --- Empty states ---
     if (inv.length === 0) {
-        facts.push(() => `La dispensa è vuota! Fai una bella spesa. 🛒`);
-        facts.push(() => `Nessun prodotto registrato. Scansiona qualcosa per iniziare!`);
+        facts.push(() => t('facts.pantry_empty'));
+        facts.push(() => t('facts.pantry_empty_scan'));
     }
 
     // --- Location distribution ---
@@ -12953,7 +13319,7 @@ function generateScreensaverFact() {
             const parts = Object.entries(byLocation).map(([loc, items]) => 
                 `${LOCATIONS[loc]?.icon || '📦'} ${items.length}`
             );
-            return `Distribuzione: ${parts.join('  ·  ')}`;
+            return t('facts.location_distribution').replace('{parts}', parts.join('  ·  '));
         });
     }
 
@@ -12963,7 +13329,7 @@ function generateScreensaverFact() {
 
     // Pick a random fact
     if (facts.length === 0) {
-        return `${greeting}! La tua Dispensa ti aspetta.`;
+        return t('facts.pantry_waiting').replace('{greeting}', greeting);
     }
     return facts[Math.floor(Math.random() * facts.length)]();
 }
@@ -13334,6 +13700,65 @@ async function _finishSetup() {
     document.getElementById('setup-wizard').style.display = 'none';
 }
 
+// ===== SERVER HEARTBEAT =====
+// Polls the lightweight ?action=ping endpoint every 20 s (online) / 5 s (offline).
+// When the server is unreachable:  shows the #offline-banner, blocks the UI via
+// body.server-offline, and retries faster until the server responds again.
+
+let _serverOffline = false;
+let _heartbeatTimer = null;
+const _HB_INTERVAL_ONLINE  = 20_000; // ms — normal polling interval
+const _HB_INTERVAL_OFFLINE =  5_000; // ms — faster retry when unreachable
+
+async function _runHeartbeat() {
+    const ac = new AbortController();
+    const tid = setTimeout(() => ac.abort(), 7000); // 7 s hard timeout
+    try {
+        const res = await fetch(`${API_BASE}?action=ping`, {
+            cache: 'no-store',
+            signal: ac.signal,
+        });
+        clearTimeout(tid);
+        _setServerOffline(!res.ok);
+    } catch (e) {
+        clearTimeout(tid);
+        _setServerOffline(true);
+    }
+}
+
+function _setServerOffline(offline) {
+    if (offline === _serverOffline) {
+        // State unchanged — reschedule at the appropriate interval and return
+        _heartbeatTimer = setTimeout(_runHeartbeat,
+            offline ? _HB_INTERVAL_OFFLINE : _HB_INTERVAL_ONLINE);
+        return;
+    }
+    _serverOffline = offline;
+    document.body.classList.toggle('server-offline', offline);
+    const banner = document.getElementById('offline-banner');
+    if (banner) banner.style.display = offline ? '' : 'none';
+    if (offline) {
+        showToast(t('error.server_offline'), 'error');
+    } else {
+        showToast(t('error.server_restored'), 'success');
+        // Refresh the current page since updates may have been missed
+        refreshCurrentPage();
+    }
+    _heartbeatTimer = setTimeout(_runHeartbeat,
+        offline ? _HB_INTERVAL_OFFLINE : _HB_INTERVAL_ONLINE);
+}
+
+/** Called by the banner "Retry" button to trigger an immediate check. */
+function _heartbeatRetry() {
+    clearTimeout(_heartbeatTimer);
+    _runHeartbeat();
+}
+
+/** Start the heartbeat loop (called once from _initApp). */
+function startHeartbeat() {
+    _runHeartbeat(); // immediate first probe
+}
+
 async function _initApp() {
     // Check for setup wizard resume (after language change)
     const resumeStep = localStorage.getItem('evershelf_setup_step');
@@ -13383,6 +13808,7 @@ async function _initApp() {
     initSpesaMode();
     initScreensaverShortcuts();
     startBgShoppingRefresh();
+    startHeartbeat();
     _injectKioskOverlay(); // kiosk X / refresh buttons (only when running inside Android WebView)
 
     // Hide preloader once the dashboard is rendered

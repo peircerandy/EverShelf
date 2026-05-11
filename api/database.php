@@ -9,7 +9,37 @@
 
 define('DB_PATH', __DIR__ . '/../data/evershelf.db');
 
+/**
+ * Ensure the data directory exists and is writable by the web-server user.
+ * This is needed when a Docker volume is first mounted: the image's chown
+ * step is applied to the image layer, but a fresh named volume starts empty
+ * (owned by root), making SQLite's PDO::__construct fail with HY000[14].
+ */
+function _ensureDataDir(): void {
+    $dir = dirname(DB_PATH);
+    if (!is_dir($dir)) {
+        if (!mkdir($dir, 0775, true) && !is_dir($dir)) {
+            throw new \RuntimeException("Cannot create data directory: $dir");
+        }
+    }
+    if (!is_writable($dir)) {
+        // Try to fix permissions (only works when running as root, e.g. first boot)
+        @chmod($dir, 0775);
+        if (!is_writable($dir)) {
+            throw new \RuntimeException(
+                "Data directory is not writable: $dir — run: chown -R www-data:www-data $dir"
+            );
+        }
+    }
+    // Ensure backups sub-directory exists too
+    $backups = $dir . '/backups';
+    if (!is_dir($backups)) {
+        @mkdir($backups, 0775, true);
+    }
+}
+
 function getDB(): PDO {
+    _ensureDataDir();
     $isNew = !file_exists(DB_PATH);
     $db = new PDO('sqlite:' . DB_PATH);
     $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
@@ -74,6 +104,11 @@ function initializeDB(PDO $db): void {
         CREATE INDEX IF NOT EXISTS idx_inventory_location ON inventory(location);
         CREATE INDEX IF NOT EXISTS idx_transactions_product ON transactions(product_id);
         CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(created_at);
+        -- Composite indexes for hot queries
+        -- getStats(): WHERE type IN (...) AND created_at >= ...
+        CREATE INDEX IF NOT EXISTS idx_transactions_type_date ON transactions(type, created_at);
+        -- smartShopping(): GROUP BY product_id filtering on type+undone
+        CREATE INDEX IF NOT EXISTS idx_transactions_pid_type_undone ON transactions(product_id, type, undone);
     ");
 }
 
@@ -108,6 +143,8 @@ function migrateDB(PDO $db): void {
         $db->exec("DROP TABLE transactions_old");
         $db->exec("CREATE INDEX IF NOT EXISTS idx_transactions_product ON transactions(product_id)");
         $db->exec("CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(created_at)");
+        $db->exec("CREATE INDEX IF NOT EXISTS idx_transactions_type_date ON transactions(type, created_at)");
+        $db->exec("CREATE INDEX IF NOT EXISTS idx_transactions_pid_type_undone ON transactions(product_id, type, undone)");
     }
 
     // --- New shared tables ---
@@ -192,6 +229,10 @@ function migrateDB(PDO $db): void {
     if (!in_array('undone', $txColNames)) {
         $db->exec("ALTER TABLE transactions ADD COLUMN undone INTEGER DEFAULT 0");
     }
+
+    // Ensure composite indexes exist (added in v1.7.5 for performance)
+    $db->exec("CREATE INDEX IF NOT EXISTS idx_transactions_type_date ON transactions(type, created_at)");
+    $db->exec("CREATE INDEX IF NOT EXISTS idx_transactions_pid_type_undone ON transactions(product_id, type, undone)");
 }
 
 /**
@@ -324,7 +365,7 @@ function estimateOpenedExpiryDaysPHP(string $name, string $category, string $loc
     if (preg_match('/latte\s+(uht|a\s+lunga)/', $n)) return 7;
     // Long-life mountain/brand milks stored in pantry before use (UHT)
     if (preg_match('/latte.*(montagna|alta\s+qual|parmalat|granarolo|esselunga|conservaz|microfiltrat)/i', $n)) return 7;
-    if (preg_match('/\blatte\b/', $n)) return 4;
+    if (preg_match('/\blatte\b/', $n)) return 7; // generic: default to UHT (most common in IT households)
     if (preg_match('/\b(yogurt|yaourt|yoghurt)\b/', $n)) return 5;
     if (preg_match('/mozzarella|burrata|stracciatella/', $n)) return 3;
     if (preg_match('/philadelphia|spalmabile/', $n)) return 7;

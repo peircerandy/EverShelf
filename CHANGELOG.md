@@ -5,7 +5,96 @@ All notable changes to EverShelf will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.7.4] - 2026-05-07
+## [1.7.10] - 2026-05-11
+
+### Fixed
+- **Banner "Imposta scadenza" non faceva nulla** — `editBannerNoExpiry()` chiamava `openEditInventoryModal()` che non esiste. Corretto in `editInventoryItem()` (la funzione corretta usata da tutti gli altri handler banner). Aggiunto anche il fetch preventivo di `inventory_list` perché `currentInventory` è vuoto sulla dashboard.
+- **"Prodotto non trovato" aprendo modal da banner** — `currentInventory` è sempre vuoto sulla dashboard; il fetch dell'inventario ora avviene prima di aprire la modal (stesso pattern di `editReviewItem` e `weighBannerItem`).
+- **Banner scaduto su latte UHT aperto** — Il testo mostrava "Scaduto!" invece di "Aperto da troppo tempo". Ora i prodotti con `opened_at` mostrano "Aperto da N giorni in [posizione]" sia nel titolo che nel dettaglio del banner.
+- **Shelf life latte generico 4 → 7 giorni** — Il latte senza qualificatori (es. "Latte") veniva trattato come fresco (4 giorni). Il latte fresco è già gestito esplicitamente (`latte fresco/intero/parzial/scremato` → 3gg); il generico ora vale 7 giorni (default UHT). Fix applicato sia in PHP (`database.php`) che in JS (`app.js`).
+- **`opened_at` stale sulle confezioni intere dopo split** — Quando un uso splitta la riga in "confezioni intere + frazione aperta", la riga delle intere non azzerava `opened_at`. Ora tutti e 3 i percorsi di split eseguono `opened_at = NULL` sulla riga sigillata.
+- **`inventory_update` non registrava transazioni** — La modal di modifica quantità aggiornava l'inventario senza creare transazioni. La differenza viene ora registrata automaticamente come `'in'` o `'out'` con nota `[Correzione manuale]`, evitando falsi positivi nel rilevatore di anomalie.
+- **False anomalie di consumo dopo la spesa** — La baseline della prediction usava solo la quantità del rifornimento (`restockQty`), ignorando le scorte preesistenti → `actual > expected` sistematicamente. Nuova baseline: `qty_attuale + consumato_da_ultimo_rifornimento`, che riflette correttamente la realtà indipendentemente dalle scorte pregresse.
+- **Banner "consumo anomalo" su quasi tutti i prodotti** — Due fix:
+  1. `expected = 0` non genera più anomalia "more" (il modello pensa che dovresti aver finito, ma hai ricomprato).
+  2. Soglia "more than expected" alzata al 400% (era 30%); "less than expected" rimane al 30%.
+- **Sezione scaduti mostra prodotti già buttati** — La query `expired` mancava di `AND i.quantity > 0`; i prodotti buttati (qty=0) con scadenza passata continuavano ad apparire. Corretta la query + pulizia righe orfane nel DB.
+- **Hardcoded `scade il` in banner** — Stringa italiana hardcodata nel dettaglio del banner scaduti rimossa.
+- **Docker: `SQLSTATE[HY000][14] unable to open database file`** — Aggiunta `_ensureDataDir()` in `database.php` che crea la directory se mancante e tenta `chmod(0775)` se non scrivibile.
+
+### Added
+- **i18n completa** — Aggiunti ~25 chiavi di traduzione mancanti per UI kiosk, gemini, banner, scanner, shopping, appliances in tutti e 3 i file (`it.json`, `en.json`, `de.json`). Totale: 934 chiavi per lingua.
+
+
+### Added
+- **Category badge on inventory items** — Every product in the inventory now displays a macro-category badge (icon + label) next to the location badge. Badges showing `altro` are asynchronously refined via the new `guess_category` AI endpoint (Gemini + `data/category_ai_cache.json` cache) so the correct category appears automatically after the page loads.
+- **Category search** — The inventory search bar now matches items by category. Typing "biscotti" returns every cookie/biscuit regardless of brand or exact name; the match uses both the direct category key and the translated label.
+- **Brand map in `guessCategoryFromName`** — A fast-path brand table (Oreo, Ringo, Uno, Barilla, De Cecco, Galbani, Mutti, Lavazza, etc.) provides instant category resolution before any regex evaluation.
+- **PHP `guess_category` endpoint** — New server-side action that calls Gemini to classify a product name into a local category key, with file-based caching (`data/category_ai_cache.json`). Returns `altro` immediately when no Gemini API key is configured.
+
+### Fixed
+- **Duplicate banner alerts** — `loadBannerAlerts()` was occasionally enqueuing the same item multiple times when called concurrently. Fixed with a `_bannerLoading` re-entrancy guard and a `_queuedItemIds` Set that prevents any item from being pushed more than once per refresh cycle.
+- **`mapToLocalCategory` with `en:dairies` / `en:dairies-and-eggs`** — The dairy regex was not matching OpenFoodFacts tags that use the `dairi` stem; extended to cover the full range of dairy tags.
+- **`mapToLocalCategory` always returning `altro`** — When the input category was already `altro`, the function exited the direct-match loop before attempting any fallback, losing all name-based guesses. The loop now skips the `altro` key for the early-return and falls back to `guessCategoryFromName(productName)` at the end.
+- **"Tonno all'olio" → condimenti** — `tonno\b` was matched after `olio\b` (condimenti) due to regex ordering. Moved the conserve block before the condimenti block so tuna products resolve correctly.
+
+### Security
+- **AI function guards** — All Gemini-powered functions now check `_geminiAvailable` (JS) or the presence of `GEMINI_API_KEY` (PHP) before executing. Affected functions: `_refineCategoryBadgesAsync`, `fetchAllPrices`, `getShoppingPrice`. The PHP endpoint returns `{"success":false,"error":"no_api_key"}` instead of silently returning empty results, making the missing-key state explicit and diagnosable.
+
+## [1.7.8] - 2026-05-10
+
+### Added
+- **Trasferisci a Ricette dalla chat** — Quando la chat con Gemini Chef genera una ricetta, compare il bottone "📥 Trasferisci a Ricette". Premendolo, Gemini converte il testo in JSON strutturato completo (titolo, pasti, ingredienti, passi), il backend arricchisce ogni ingrediente con product_id e location via fuzzy-match (identico a generateRecipe), la ricetta viene salvata in archivio e si apre direttamente nella sezione Ricette con tutti i pulsanti "Usa" e la modalità cottura completa.
+- **Bottone "Apri la ricetta"** — Dopo un trasferimento riuscito, il bottone "📥 Trasferisci a Ricette" si trasforma direttamente in "📖 Apri la ricetta" (stesso elemento DOM), evitando problemi di sovrapposizione.
+- **Crea una ricetta per ingrediente** — Nel pannello azione di ogni alimento in inventario compare il bottone "👨‍🍳 Crea una ricetta con questo" (teal, larghezza piena). Premendolo, Gemini genera una ricetta italiana usando quell'alimento come protagonista (stesso pipeline di chatToRecipe: arricchimento fuzzy-match inventario, meal=null, 8192 token max).
+- **meal non auto-categorizzato** — Le ricette generate da chat o da ingrediente non vengono più auto-categorizzate (meal rimane null); il tag pasto nell'UI viene mostrato solo se valorizzato.
+
+### Fixed
+- **Smart shopping: falso positivo "quasi finito"** — Se un prodotto in grammi/ml era quasi esaurito (es. Burro 30g = 12%) ma lo stesso prodotto era disponibile anche come confezione (Burro 1 conf = 99%), il sistema segnalava ugualmente "sta finendo". Ora verifica se la famiglia `shopping_name` ha scorte da altri prodotti: se sì, l'alert viene soppresso. (Esempio: 30g di Burro + 1 conf di Burro → nessun alert.)
+- **Traduzioni JSON corrotte** — La sezione `action` era duplicata nei file `de.json`, `en.json` e `it.json`, causando errori di parsing che bloccavano la CI/CD. Rimossa la sezione spuria.
+
+## [1.7.7] - 2026-05-10
+
+### Fixed
+- **Smart shopping family suppression** — La logica `recentlyExhausted` (prodotti terminati < 14gg) bypassava erroneamente anche la suppression per `shopping_name` family, causando falsi positivi: prodotti come Yaourt Vanille apparivano come urgenti anche con 2kg di Yogurt in stock, Salame Paesano con 1kg di Affettato in stock, Gran bauletto rustico con più pani in stock. Ora `recentlyExhausted` bypassa solo il check token-based (match lasco), mentre la family suppression per `shopping_name` si applica sempre.
+- **Shelf life pre-warming nel cron** — Il cron ora chiama `prewarmShelfLifeCache()` ogni 5 minuti, precaricando via Gemini AI la shelf life degli item aperti in inventario (max 5 item per ciclo) prima che l'utente li visualizzi. Questo elimina il delay percepibile al primo click su "Aperto il...".
+
+## [1.7.6] - 2026-05-10
+
+### Fixed
+- **`shopping_name` troncato (Piadina)** — Il prodotto "Piadine medie" aveva `shopping_name='Pi'` (troncato), non veniva aggruppato correttamente nella famiglia. Corretto in `Piadina`.
+- **Family merges DB** — Grana Padano ora sotto `Formaggio` (era `Grana` singleton), Prosciutto cotto ora sotto `Affettato`, Panna acida ora sotto `Panna`.
+- **`daily_rate` su periodo effettivo** — Il tasso di consumo giornaliero usava `first_in → now` come finestra, diluendo il rate con periodi in cui il prodotto era già esaurito (es. aglio esaurito a 34gg veniva calcolato su 60+). Ora usa `first_in → last_activity` (ultimo acquisto o ultimo uso), più preciso per le previsioni di riordino.
+- **Anomaly dismiss key stabile** — La chiave di dismiss usava `product_id + round(expected)` che cambiava ad ogni nuova transazione, causando la ricomparsa delle anomalie già chiuse. Ora usa `product_id + direction` (phantom/missing/untracked) — stabile finché la direzione non cambia.
+- **Smart shopping: prodotti esauriti < 14 giorni** — Prodotti terminati negli ultimi 14 giorni non vengono più soppressi dal check token-coverage o shopping_name-family: se li hai appena finiti, è probabile tu voglia ricomprarli indipendentemente dalla presenza di equivalenti in stock.
+- **Chat pruning** — `chatSave()` ora esegue `DELETE` dei messaggi oltre i 200 più recenti dopo ogni salvataggio, evitando crescita illimitata della tabella `chat_messages`.
+- **`getStats()` query consolidate** — Le 5 query separate (COUNT products, SUM inventory, COUNT locations, COUNT recent_in, COUNT recent_out) sono ora una sola query con subselect, riducendo i round-trip SQLite da 5 a 1.
+- **Bring! cleanup rate-limiting** — Aggiunto `usleep(300ms)` tra le rimozioni multiple per evitare di sovraccaricare l'API Bring! in burst.
+- **Indici compositi su `transactions`** — Aggiunti `idx_transactions_type_date(type, created_at)` (per `getStats`) e `idx_transactions_pid_type_undone(product_id, type, undone)` (per `smartShopping`), con migration automatica per DB esistenti.
+
+### Security
+- **CSRF protection** — Le action di scrittura (inventory_add, bring_add, product_save, ecc.) richiedono ora `X-EverShelf-Request: 1` oppure `Content-Type: application/json`. Il frontend `api()` invia sempre il header su POST. Questo previene attacchi CSRF cross-site tramite form HTML.
+
+## [1.7.5] - 2026-05-10
+
+### Added
+- **Vacuum sealed prompt on item use** — After using a conf/weighted-unit item that still has remaining stock, a sliding popup asks "🔒 Messo sotto vuoto?" with Sì/No buttons and an 8-second auto-dismiss countdown bar. Default is Sì if the item was previously sealed, No otherwise. Works for all container units (conf, g, kg, ml, l) and any item previously marked as vacuum sealed.
+- **Multi-function appliance awareness in recipes** — When the user sets a multi-function appliance (Cookeo, Bimby, Thermomix, Monsieur Cuisine, Instant Pot, Multicooker, Robot da cucina) in Settings, all Gemini recipe prompts (chat, recipe generation, weekly meal plan) now explicitly instruct the AI to consolidate as many cooking steps as possible into that single machine. Each appliance's available functions (rosolare, tritare, vapore, cuocere a pressione, etc.) are listed and the AI is required to indicate the specific mode/program at each step.
+- **Server-side Bring! cleanup in cron** — `bringCleanupObsolete()` now runs every 5 minutes via cron without requiring any client page load. Items auto-added by the app (identified by `⚡`/`🟠`/`🛒` markers in their Bring! spec) are automatically removed when the smart shopping engine no longer flags them as needed. Works across all devices/clients.
+- **`shopping_name` in `inventory_list` API** — The `inventory_list` endpoint now returns the `shopping_name` field from the products table, enabling family-based stock matching in the client-side cleanup fallback.
+
+### Fixed
+- **Bring! cleanup: false token match (Succo/Frutta)** — `bringCleanupObsolete` previously indexed smart items by product name tokens. "Pera Italiana **Succo** e polpa **frutta**" (shopping_name: "Pere") caused "Succo" and "Frutta" to be retained on Bring! indefinitely even when fully stocked. Now indexes **only** by `shopping_name` tokens.
+- **Bring! cleanup: expired items with fresh family stock (Verdure)** — When a product is expired but its `shopping_name` family has ≥50% fresh stock from other products (e.g. Minestrone tradizione scaduto 01/05 but 590g fresh Verdure in freezer/pantry), it is no longer flagged as `critical` and is removed from the shopping list.
+- **Bring! remove: catalog items not removed (Formaggio/Käse)** — `bringRemoveItem()` and `bringCleanupObsolete()` now try both the Italian display name and the Bring! internal German catalog key (e.g. `Käse` for `Formaggio`). Previously, catalog items with a German key were silently not removed.
+- **Barcode scanner: EAN auto-submit on manual input** — Typing or pasting a valid 8/13-digit EAN in the manual barcode field now auto-submits immediately without needing to press a button. Checksum validation gives a warning toast for invalid codes without blocking entry.
+- **Shopping list: `isExpiringSoon` false positives** — Products bought in bulk that expire naturally in 3 days (e.g. fresh produce) were flagged `medium` urgency on the shopping list despite having 100%+ stock. Now requires `pctLeft < 50%` before triggering.
+- **Shopping list: expired batch with fresh restock suppressed** — Products with an expired batch AND a recent fresh restock (≥50% fresh stock) are no longer flagged `critical` for shopping. The expired-batch UI banner on the dashboard handles the disposal prompt instead.
+- **Shopping list: cross-device cleanup** — Client-side `cleanupObsoleteBringItems()` now detects app-added items by their spec markers (`⚡`/`🟠`/`🛒`) instead of a per-device localStorage map, making cleanup work correctly on all clients including newly logged-in devices. Throttle reduced from 30 minutes to 3 minutes.
+- **API fetch caching disabled** — All `api()` calls in the frontend now set `cache: 'no-store'` to prevent stale data from browser cache.
+- **Shopping page multi-client sync** — Added 45-second polling on the shopping page so changes made on another device are reflected automatically.
+
+
 
 ### Added
 - **AI price estimation for shopping list** — Each item on the Bring! shopping list now shows an estimated retail price badge (per unit and total). Prices are fetched from Gemini AI and cached server-side for 3 months (`PRICE_UPDATE_MONTHS`). The running estimated total is displayed both in the shopping tab and as a green pill badge on the dashboard stat card.

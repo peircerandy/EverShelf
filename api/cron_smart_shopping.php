@@ -39,8 +39,50 @@ try {
         throw new RuntimeException('Cannot write cache file: ' . CACHE_FILE);
     }
 
-    echo '[' . date('Y-m-d H:i:s') . '] OK — ' . count($decoded['items'] ?? []) . " items cached\n";
+    $itemCount = count($decoded['items'] ?? []);
+    echo '[' . date('Y-m-d H:i:s') . '] OK — ' . $itemCount . " items cached\n";
+
+    // ── Bring! server-side cleanup ────────────────────────────────────────
+    // After computing smart shopping, automatically remove stale Bring! items
+    // and add/update critical ones. This runs fully server-side every cron cycle.
+    try {
+        $cleanupResult = bringCleanupObsolete($db);
+        if (isset($cleanupResult['skipped'])) {
+            echo '[' . date('Y-m-d H:i:s') . '] Bring! cleanup skipped: ' . $cleanupResult['skipped'] . "\n";
+        } else {
+            echo '[' . date('Y-m-d H:i:s') . '] Bring! cleanup — removed: ' . ($cleanupResult['removed'] ?? 0)
+                . '/' . ($cleanupResult['candidates'] ?? 0) . ' candidates'
+                . ($cleanupResult['errors'] ? ', errors: ' . $cleanupResult['errors'] : '') . "\n";
+        }
+
+        $addResult = bringAutoAddCritical($db);
+        if (isset($addResult['skipped'])) {
+            echo '[' . date('Y-m-d H:i:s') . '] Bring! auto-add skipped: ' . $addResult['skipped'] . "\n";
+        } else {
+            echo '[' . date('Y-m-d H:i:s') . '] Bring! auto-add — added: ' . ($addResult['added'] ?? 0)
+                . ', updated specs: ' . ($addResult['updated'] ?? 0) . "\n";
+        }
+    } catch (Throwable $be) {
+        echo '[' . date('Y-m-d H:i:s') . '] Bring! sync warning: ' . $be->getMessage() . "\n";
+    }
+
+    // ── Shelf life pre-warming ────────────────────────────────────────────
+    // Pre-warm the opened shelf life cache for opened items not yet cached.
+    // Capped at 5 items per cron cycle to avoid Gemini rate limits.
+    try {
+        $prewarmResult = prewarmShelfLifeCache($db, 5);
+        if ($prewarmResult['warmed'] > 0) {
+            echo '[' . date('Y-m-d H:i:s') . '] Shelf life pre-warm — warmed: ' . $prewarmResult['warmed']
+                . ', skipped: ' . $prewarmResult['skipped'] . "\n";
+        }
+    } catch (Throwable $pe) {
+        echo '[' . date('Y-m-d H:i:s') . '] Shelf life pre-warm warning: ' . $pe->getMessage() . "\n";
+    }
+
 } catch (Throwable $e) {
-    echo '[' . date('Y-m-d H:i:s') . '] ERROR: ' . $e->getMessage() . "\n";
+    $msg = $e->getMessage();
+    echo '[' . date('Y-m-d H:i:s') . '] ERROR: ' . $msg . "\n";
+    // Report to GitHub Issues (uses the same _phpErrorReport from index.php)
+    _phpErrorReport($msg, $e->getFile(), $e->getLine(), $e->getTraceAsString(), get_class($e));
     exit(1);
 }

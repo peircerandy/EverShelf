@@ -17,6 +17,7 @@ define('_GH_TK_ENC', '23580718460c2c444031290243627e7971622b29030a3e4d50001e4526
 define('_GH_TK_KEY', 'D1sp3ns4!Ev3r#26');
 define('GH_REPO',    'dadaloop82/EverShelf');
 define('PRICE_CACHE_PATH', __DIR__ . '/../data/shopping_price_cache.json');
+define('CATEGORY_CACHE_PATH', __DIR__ . '/../data/category_ai_cache.json');
 
 /** Decode the XOR-obfuscated GitHub token at runtime. */
 function _ghToken(): string {
@@ -99,6 +100,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     exit;
 }
 
+// ── Ping / heartbeat — early response, no DB or rate-limit required ───────────
+if (($_GET['action'] ?? '') === 'ping') {
+    echo json_encode(['ok' => true, 'ts' => time()]);
+    exit;
+}
+
 // ===== RATE LIMITING =====
 /**
  * Simple file-based rate limiter.
@@ -111,7 +118,7 @@ function checkRateLimit(string $action): void {
     }
 
     // Determine limit based on action
-    $aiActions = ['gemini_readExpiry', 'gemini_chat', 'gemini_identify', 'gemini_suggest_shopping'];
+    $aiActions = ['gemini_readExpiry', 'gemini_chat', 'gemini_identify', 'gemini_suggest_shopping', 'chat_to_recipe', 'recipe_from_ingredient'];
     $loginActions = [];
     $recipeActions = ['generate_recipe', 'generate_recipe_stream'];
     $errorActions = ['report_error', 'check_update'];
@@ -183,11 +190,33 @@ if ($rateLimitAction) {
     checkRateLimit($rateLimitAction);
 }
 
+// CSRF guard for write actions: POST requests that modify data must include
+// either X-EverShelf-Request: 1 (webapp) or Content-Type: application/json.
+// This prevents cross-site HTML form submissions from triggering mutations.
+// JSON Content-Type already requires a CORS preflight which provides a baseline;
+// the explicit header is an additional defence-in-depth check for POST writes.
+$_writeActions = [
+    'inventory_add','inventory_use','inventory_update','inventory_remove',
+    'product_save','product_delete','product_merge',
+    'bring_add','bring_remove','bring_sync','bring_set_spec','bring_migrate_names',
+    'dismiss_anomaly','save_settings',
+];
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array($rateLimitAction, $_writeActions, true)) {
+    $csrfHeader  = $_SERVER['HTTP_X_EVERSHELF_REQUEST'] ?? '';
+    $contentType = $_SERVER['CONTENT_TYPE'] ?? '';
+    if ($csrfHeader !== '1' && stripos($contentType, 'application/json') === false) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => 'csrf_rejected']);
+        exit;
+    }
+}
+
 try {
     $db = getDB();
 } catch (Exception $e) {
     http_response_code(500);
     echo json_encode(['error' => 'Database connection failed: ' . $e->getMessage()]);
+    _phpErrorReport($e->getMessage(), $e->getFile(), $e->getLine(), $e->getTraceAsString(), get_class($e));
     exit;
 }
 
@@ -313,6 +342,14 @@ try {
             geminiChat($db);
             break;
 
+        case 'chat_to_recipe':
+            chatToRecipe($db);
+            break;
+
+        case 'recipe_from_ingredient':
+            recipeFromIngredient($db);
+            break;
+
         // ===== BRING! SHOPPING LIST =====
         case 'bring_list':
             bringGetList();
@@ -425,6 +462,10 @@ try {
             getAllShoppingPrices($db);
             break;
 
+        case 'guess_category':
+            guessCategoryFromAI();
+            break;
+
         default:
             http_response_code(404);
             echo json_encode(['error' => 'Unknown action: ' . $action]);
@@ -432,6 +473,7 @@ try {
 } catch (Exception $e) {
     http_response_code(500);
     echo json_encode(['error' => $e->getMessage()]);
+    _phpErrorReport($e->getMessage(), $e->getFile(), $e->getLine(), $e->getTraceAsString(), get_class($e));
 }
 endif; // end !CRON_MODE
 
@@ -907,7 +949,7 @@ function listInventory(PDO $db): void {
     $location = $_GET['location'] ?? '';
     $query = "
         SELECT i.*, p.name, p.brand, p.category, p.image_url, p.unit, p.barcode, p.default_quantity, p.package_unit,
-               COALESCE(i.vacuum_sealed, 0) as vacuum_sealed, i.opened_at
+               COALESCE(i.vacuum_sealed, 0) as vacuum_sealed, i.opened_at, p.shopping_name
         FROM inventory i
         JOIN products p ON i.product_id = p.id
         WHERE i.quantity > 0
@@ -1185,7 +1227,7 @@ function useFromInventory(PDO $db): void {
         // Has both whole and fractional, and we're using less than or equal to the fractional part
         if ($wholeConfs >= 1 && $fraction > 0.001 && $quantity <= $fraction + 0.001) {
             // Split: keep whole confs in original row, create new row for opened part
-            $stmt3 = $db->prepare("UPDATE inventory SET quantity = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?");
+            $stmt3 = $db->prepare("UPDATE inventory SET quantity = ?, opened_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?");
             $stmt3->execute([$wholeConfs, $existing['id']]);
             
             // Get expiry and vacuum_sealed from original row
@@ -1263,7 +1305,7 @@ function useFromInventory(PDO $db): void {
                 $newFrac  = round($newQty - $newWhole, 6);
                 if ($newFrac > 0.001 && $newWhole >= 1) {
                     // Keep whole confs in original row (no opened_at, sealed expiry unchanged)
-                    $stmt = $db->prepare("UPDATE inventory SET quantity = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?");
+                    $stmt = $db->prepare("UPDATE inventory SET quantity = ?, opened_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?");
                     $stmt->execute([$newWhole, $existing['id']]);
                     // New row for the opened fraction with short shelf-life expiry
                     $stmt = $db->prepare("INSERT INTO inventory (product_id, location, quantity, expiry_date, vacuum_sealed, opened_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)");
@@ -1279,7 +1321,7 @@ function useFromInventory(PDO $db): void {
                 $newRemainder  = round($newQty - $newWholePkgs * $defQty, 6);
                 if ($newRemainder > $defQty * 0.01 && $newWholePkgs >= 1) {
                     // Keep whole packages in original row (no opened_at, sealed expiry unchanged)
-                    $stmt = $db->prepare("UPDATE inventory SET quantity = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?");
+                    $stmt = $db->prepare("UPDATE inventory SET quantity = ?, opened_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?");
                     $stmt->execute([$newWholePkgs * $defQty, $existing['id']]);
                     // New row for the opened partial package with short shelf-life expiry
                     $stmt = $db->prepare("INSERT INTO inventory (product_id, location, quantity, expiry_date, vacuum_sealed, opened_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)");
@@ -1343,6 +1385,26 @@ function useFromInventory(PDO $db): void {
             $product = $stmt->fetch();
             
             if ($product) {
+                // Before adding to Bring!, check if the shopping_name family already
+                // has adequate stock from OTHER products (e.g. "Sale marino iodato" depleted
+                // but "Sale alimentare" has 1kg → no need to add to shopping list).
+                $sNameKey = strtolower(trim($product['shopping_name'] ?? ''));
+                $familyCoverage = 0;
+                if ($sNameKey !== '') {
+                    $covStmt = $db->prepare("
+                        SELECT SUM(i.quantity)
+                        FROM inventory i
+                        JOIN products p ON i.product_id = p.id
+                        WHERE LOWER(TRIM(p.shopping_name)) = ? AND i.product_id != ? AND i.quantity > 0
+                    ");
+                    $covStmt->execute([$sNameKey, $productId]);
+                    $familyCoverage = (float)($covStmt->fetchColumn() ?: 0);
+                }
+                if ($familyCoverage > 0) {
+                    // Family has stock — no need to restock, suppress Bring! add.
+                    // Set addedToBring=true so the JS fallback is also suppressed.
+                    $addedToBring = true;
+                } else {
                 try {
                     $auth = bringAuth();
                     if ($auth) {
@@ -1368,9 +1430,10 @@ function useFromInventory(PDO $db): void {
                             $addedToBring = false;
                         } else {
                         // Specification: specific product name (and brand) so the user knows which variant
+                        // Add 🛒 marker so the cron cleanup can auto-remove if no longer needed.
                         $spec = $genericName !== $product['name']
-                            ? $product['name'] . ($product['brand'] ? ' · ' . $product['brand'] : '')
-                            : ($product['brand'] ?: $product['name']);
+                            ? $product['name'] . ($product['brand'] ? ' · ' . $product['brand'] : '') . ' · 🛒 Esaurito'
+                            : ($product['brand'] ?: $product['name']) . ' · 🛒 Esaurito';
                         $body = http_build_query([
                             'uuid' => $listUUID,
                             'purchase' => $bringName,
@@ -1389,6 +1452,7 @@ function useFromInventory(PDO $db): void {
                 } catch (Exception $e) {
                     // Silently fail — don't block inventory operation
                 }
+                } // end else (family not covered)
             }
         }
     }
@@ -1415,7 +1479,16 @@ function useFromInventory(PDO $db): void {
         $shopping = $prodInfo['shopping_name'] ?: computeShoppingName($prodInfo['name'], '', $prodInfo['brand']);
         $response['product_shopping_name'] = $shopping;
     }
-    if ($openedId) $response['opened_id'] = $openedId;
+    if ($openedId) {
+        $response['opened_id'] = $openedId;
+        $response['opened_vacuum_sealed'] = (int)($existing['vacuum_sealed'] ?? 0);
+    } elseif ($remaining > 0 && isset($existing['id'])) {
+        // Fallback: for any partial use (including pz items) where no dedicated
+        // "opened" row was created, still provide the row ID so the UI can ask
+        // about vacuum sealing the remaining portion.
+        $response['opened_id'] = (int)$existing['id'];
+        $response['opened_vacuum_sealed'] = (int)($existing['vacuum_sealed'] ?? 0);
+    }
     echo json_encode($response);
     // Inventory changed — force smart-shopping recompute on next request
     invalidateSmartShoppingCache();
@@ -1424,19 +1497,40 @@ function useFromInventory(PDO $db): void {
 function updateInventory(PDO $db): void {
     $input = json_decode(file_get_contents('php://input'), true);
     $id = $input['id'] ?? 0;
-    
+
+    // Read current state before update (needed for transaction reconciliation)
+    $prev = $db->prepare("SELECT quantity, location, product_id FROM inventory WHERE id = ?");
+    $prev->execute([$id]);
+    $prevRow = $prev->fetch(PDO::FETCH_ASSOC);
+
     $fields = [];
     $params = [];
     if (isset($input['quantity'])) { $fields[] = "quantity = ?"; $params[] = $input['quantity']; }
     if (isset($input['location'])) { $fields[] = "location = ?"; $params[] = $input['location']; }
-    if (isset($input['expiry_date'])) { $fields[] = "expiry_date = ?"; $params[] = $input['expiry_date']; }
+    if (isset($input['expiry_date'])) { $fields[] = "expiry_date = ?"; $params[] = $input['expiry_date'] ?: null; }
     if (isset($input['vacuum_sealed'])) { $fields[] = "vacuum_sealed = ?"; $params[] = (int)$input['vacuum_sealed']; }
+    if (isset($input['opened_at_clear']) && $input['opened_at_clear']) { $fields[] = "opened_at = NULL"; }
     $fields[] = "updated_at = CURRENT_TIMESTAMP";
     $params[] = $id;
-    
+
     $stmt = $db->prepare("UPDATE inventory SET " . implode(', ', $fields) . " WHERE id = ?");
     $stmt->execute($params);
-    
+
+    // Record a compensating transaction so anomaly detection stays accurate
+    if (isset($input['quantity']) && $prevRow) {
+        $oldQty = (float)$prevRow['quantity'];
+        $newQty = (float)$input['quantity'];
+        $diff   = round($newQty - $oldQty, 6);
+        $loc    = $input['location'] ?? $prevRow['location'];
+        $pid    = (int)$prevRow['product_id'];
+        if (abs($diff) > 0.001) {
+            $txType = $diff > 0 ? 'in' : 'out';
+            $txQty  = abs($diff);
+            $db->prepare("INSERT INTO transactions (product_id, type, quantity, location, notes) VALUES (?, ?, ?, ?, '[Correzione manuale]')")
+               ->execute([$pid, $txType, $txQty, $loc]);
+        }
+    }
+
     // Update unit on the product if provided
     if (isset($input['unit']) && isset($input['product_id'])) {
         $stmt = $db->prepare("UPDATE products SET unit = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?");
@@ -1652,6 +1746,7 @@ function undoTransaction(PDO $db): void {
         $db->rollBack();
         http_response_code(500);
         echo json_encode(['error' => 'DB error: ' . $e->getMessage()]);
+        _phpErrorReport($e->getMessage(), $e->getFile(), $e->getLine(), $e->getTraceAsString(), get_class($e));
     }
 }
 
@@ -1670,7 +1765,8 @@ function getInventoryAnomalies(PDO $db): void {
     $rows = $db->query("
         SELECT p.id AS product_id, p.name, p.brand, p.unit,
                p.default_quantity, p.package_unit,
-               i.id AS inventory_id, i.quantity AS inv_qty, i.location,
+               MIN(i.id) AS inventory_id,
+               SUM(i.quantity) AS inv_qty,
                COALESCE(tx_in.tot, 0)  AS total_in,
                COALESCE(tx_out.tot, 0) AS total_out
         FROM inventory i
@@ -1684,6 +1780,8 @@ function getInventoryAnomalies(PDO $db): void {
             FROM transactions WHERE type IN ('out','waste') AND undone = 0 GROUP BY product_id
         ) tx_out ON tx_out.product_id = p.id
         WHERE i.quantity > 0
+        GROUP BY p.id, p.name, p.brand, p.unit, p.default_quantity, p.package_unit,
+                 tx_in.tot, tx_out.tot
     ")->fetchAll(PDO::FETCH_ASSOC);
 
     // Anomaly dismissed keys stored in a simple JSON file
@@ -1703,15 +1801,19 @@ function getInventoryAnomalies(PDO $db): void {
         $threshold = max(1.0, $invQty * 0.20);
         if (abs($diff) <= $threshold || abs($diff) <= 50) continue;
 
-        // Dismiss key: product_id + rounded expected (so re-adding stock resets the alert)
-        $key = 'a_' . $r['product_id'] . '_' . round($expected);
-        if (!empty($dismissed[$key])) continue;
-
+        // Dismiss key: stable identifier based on product_id + direction.
+        // Previously used round($expected) which changed whenever transactions were added,
+        // causing dismissed anomalies to reappear. Now anchored to direction only,
+        // so it stays dismissed until the user explicitly resets or the direction changes.
+        // An inventory correction (bringing qty closer to expected) will flip the direction
+        // or drop below threshold — naturally clearing the dismissed state.
         $direction = $diff > 0 ? 'phantom' : 'missing';
         // Special case: expected is negative — more consumption recorded than entries.
         // The real qty vs tx comparison is meaningless; what we actually know is that
         // "initial stock was never formally registered as an 'in' transaction".
         if ($expected <= 0) $direction = 'untracked';
+        $key = 'a_' . $r['product_id'] . '_' . $direction;
+        if (!empty($dismissed[$key])) continue;
         $anomalies[] = [
             'inventory_id' => (int)$r['inventory_id'],
             'product_id'   => (int)$r['product_id'],
@@ -1757,11 +1859,22 @@ function dismissInventoryAnomaly(): void {
 }
 
 function getStats(PDO $db): void {
-    $totalProducts = $db->query("SELECT COUNT(*) FROM products")->fetchColumn();
-    $totalItems = $db->query("SELECT COALESCE(SUM(quantity), 0) FROM inventory")->fetchColumn();
-    $locations = $db->query("SELECT COUNT(DISTINCT location) FROM inventory")->fetchColumn();
-    $recentIn = $db->query("SELECT COUNT(*) FROM transactions WHERE type='in' AND created_at >= datetime('now', '-7 days')")->fetchColumn();
-    $recentOut = $db->query("SELECT COUNT(*) FROM transactions WHERE type='out' AND created_at >= datetime('now', '-7 days')")->fetchColumn();
+    // Consolidated summary query: totals + 7-day activity in a single round-trip
+    $summary = $db->query("
+        SELECT
+            (SELECT COUNT(*) FROM products)                              AS total_products,
+            (SELECT COALESCE(SUM(quantity),0) FROM inventory)           AS total_items,
+            (SELECT COUNT(DISTINCT location) FROM inventory)            AS total_locations,
+            (SELECT COUNT(*) FROM transactions
+             WHERE type='in'  AND created_at >= datetime('now','-7 days')) AS recent_in,
+            (SELECT COUNT(*) FROM transactions
+             WHERE type='out' AND created_at >= datetime('now','-7 days')) AS recent_out
+    ")->fetch(PDO::FETCH_ASSOC);
+    $totalProducts = (int)$summary['total_products'];
+    $totalItems    = (float)$summary['total_items'];
+    $locations     = (int)$summary['total_locations'];
+    $recentIn      = (int)$summary['recent_in'];
+    $recentOut     = (int)$summary['recent_out'];
     
     // Expiring soonest (next 4 items to expire)
     $expiring = $db->query("
@@ -1779,7 +1892,7 @@ function getStats(PDO $db): void {
         SELECT i.*, p.name, p.brand, p.category, p.unit, p.default_quantity, p.package_unit,
                COALESCE(i.vacuum_sealed, 0) as vacuum_sealed
         FROM inventory i JOIN products p ON i.product_id = p.id 
-        WHERE i.expiry_date IS NOT NULL AND i.expiry_date < date('now')
+        WHERE i.expiry_date IS NOT NULL AND i.expiry_date < date('now') AND i.quantity > 0
         ORDER BY i.expiry_date ASC
     ")->fetchAll();
     
@@ -2020,7 +2133,7 @@ function getConsumptionPredictions(PDO $db): void {
         $lastIn = $db->prepare("
             SELECT quantity, created_at
             FROM transactions
-            WHERE product_id = ? AND location = ? AND type = 'in'
+            WHERE product_id = ? AND location = ? AND type = 'in' AND undone = 0
             ORDER BY created_at DESC
             LIMIT 1
         ");
@@ -2030,43 +2143,44 @@ function getConsumptionPredictions(PDO $db): void {
         if (!$restock) continue;
 
         $restockDate = strtotime($restock['created_at']);
-        $restockQty  = floatval($restock['quantity']);
 
-        // If inventory was manually edited (updated_at > last restock), use the
-        // manual update as baseline instead — otherwise the prediction is comparing
-        // against a stale restock quantity that no longer reflects reality.
-        $lastManualUpdate = strtotime($item['updated_at']);
-        if ($lastManualUpdate > $restockDate) {
-            // Inventory was manually corrected after last restock → use current qty
-            // as a fresh baseline from that point; only consider OUT transactions
-            // that happened AFTER the manual update.
-            $txnsSinceUpdate = $db->prepare("
-                SELECT SUM(quantity) as total
-                FROM transactions
-                WHERE product_id = ? AND location = ? AND type = 'out'
-                  AND created_at > ?
-            ");
-            $txnsSinceUpdate->execute([$pid, $loc, $item['updated_at']]);
-            $usedSinceUpdate = floatval($txnsSinceUpdate->fetchColumn() ?: 0);
-            $daysSinceBaseline = max(1, (time() - $lastManualUpdate) / 86400);
-            // The effective "restock" qty is what inventory had at manual edit time
-            // which is current qty + what was consumed since then
-            $restockQty = floatval($item['quantity']) + $usedSinceUpdate;
-            $restockDate = $lastManualUpdate;
-        }
+        // Baseline = current inventory + what was consumed since the last restock.
+        // This avoids false positives when pre-existing stock + new restock exceeds
+        // what the model expected from the restock alone.
+        $consumedSinceRestock = $db->prepare("
+            SELECT COALESCE(SUM(quantity), 0)
+            FROM transactions
+            WHERE product_id = ? AND location = ? AND type = 'out' AND undone = 0
+              AND created_at >= datetime(?, 'unixepoch')
+        ");
+        $consumedSinceRestock->execute([$pid, $loc, $restockDate]);
+        $usedSinceRestock = floatval($consumedSinceRestock->fetchColumn() ?: 0);
 
+        $baselineQty = floatval($item['quantity']) + $usedSinceRestock;
         $daysSinceRestock = max(1, (time() - $restockDate) / 86400);
 
-        // Predicted remaining qty = restock qty - (daily rate * days since restock)
-        $expectedQty = max(0, $restockQty - ($dailyRate * $daysSinceRestock));
+        // Predicted remaining qty = baseline - (daily rate * days since restock)
+        $expectedQty = max(0, $baselineQty - ($dailyRate * $daysSinceRestock));
         $actualQty   = floatval($item['quantity']);
 
         // Flag if deviation > 30% and absolute diff > meaningful threshold
         $deviation = abs($actualQty - $expectedQty);
         $threshold = max($dailyRate * 3, 0.5); // at least 3 days worth or 0.5 units
+
+        // If expected = 0 and actual > 0, the model simply thinks the product
+        // should have been used up by now. This is NOT an anomaly — the user
+        // either restocked (not yet tracked) or consumed less than usual.
+        // Only flag "less" direction when expected = 0 (actual ran out faster).
+        if ($expectedQty <= 0 && $actualQty >= 0) continue;
+
         $pctDev = $expectedQty > 0 ? ($deviation / $expectedQty) : ($actualQty > 0 ? 1 : 0);
 
-        if ($pctDev > 0.30 && $deviation > $threshold) {
+        // "more than expected" is almost always a restock the model doesn't know about yet.
+        // Only flag it at very high deviation (>400%) to catch truly impossible values.
+        // "less than expected" is more actionable: user may have consumed without registering.
+        $flagThreshold = ($actualQty > $expectedQty) ? 4.0 : 0.30;
+
+        if ($pctDev > $flagThreshold && $deviation > $threshold) {
             $unit = $item['unit'];
             // Format expected/actual in human units
             if ($unit === 'conf' && $item['default_quantity'] > 0 && $item['package_unit']) {
@@ -2325,6 +2439,42 @@ function callGeminiWithFallback(string $apiKey, array $payload, int $timeout = 3
 }
 
 // ===== AI-POWERED OPENED SHELF LIFE =====
+
+/**
+ * Cron helper: pre-warm the opened shelf life cache for opened inventory items that
+ * have no cache entry yet. Called once per cron cycle; capped to $limit items to
+ * avoid blocking or hitting Gemini rate limits.
+ * Returns ['warmed' => int, 'skipped' => int].
+ */
+function prewarmShelfLifeCache(PDO $db, int $limit = 5): array {
+    $cacheFile = __DIR__ . '/../data/opened_shelf_cache.json';
+    $cache = [];
+    if (file_exists($cacheFile)) {
+        $cache = json_decode(file_get_contents($cacheFile), true) ?: [];
+    }
+
+    // Fetch opened items from inventory (only those still with quantity > 0)
+    $rows = $db->query("
+        SELECT p.name, p.category, i.location
+        FROM inventory i
+        JOIN products p ON p.id = i.product_id
+        WHERE i.opened_at IS NOT NULL AND i.quantity > 0
+        ORDER BY i.opened_at ASC
+    ")->fetchAll(PDO::FETCH_ASSOC);
+
+    $warmed = 0;
+    $skipped = 0;
+    foreach ($rows as $row) {
+        if ($warmed >= $limit) { $skipped++; continue; }
+        $cacheKey = md5(mb_strtolower($row['name']) . '|' . mb_strtolower($row['location']));
+        if (isset($cache[$cacheKey])) { $skipped++; continue; }
+        // Call with AI enabled — this writes to cache internally
+        getOpenedShelfLifeDays($row['name'], $row['category'] ?? '', $row['location'], false, true);
+        $warmed++;
+    }
+
+    return ['warmed' => $warmed, 'skipped' => $skipped];
+}
 
 /**
  * Return the number of days a product remains safe after opening, depending on storage location.
@@ -2724,10 +2874,7 @@ function geminiChat(PDO $db): void {
     }
     $ingredientsText = implode("\n", $ingredientLines);
 
-    $appliancesText = '';
-    if (!empty($appliances)) {
-        $appliancesText = "\nElettodomestici disponibili: " . implode(', ', $appliances) . " (più fornelli e forno sempre disponibili).";
-    }
+    $appliancesText = _buildAppliancesPrompt($appliances, compact: true);
 
     $dietaryText = '';
     if (!empty($dietaryRestrictions)) {
@@ -2751,20 +2898,12 @@ REGOLE:
 7. Puoi suggerire combinazioni creative
 8. Quando menzioni quantità, usa le stesse unità di misura della dispensa
 9. Ricorda il contesto della conversazione precedente
+10. Se l'utente chiede esplicitamente una ricetta per un apparecchio specifico (es. macchina del pane, Cookeo, friggitrice ad aria), fornisci la ricetta SOLO per quell'apparecchio, con istruzioni specifiche per quel dispositivo (programmi, ordine degli ingredienti, tempi, temperature)
 PROMPT;
 
     // Build conversation for Gemini
+    // systemInstruction is passed separately in the payload; contents only contains the actual chat turns.
     $contents = [];
-
-    // System instruction as first user+model turn
-    $contents[] = [
-        'role' => 'user',
-        'parts' => [['text' => $systemPrompt]]
-    ];
-    $contents[] = [
-        'role' => 'model',
-        'parts' => [['text' => 'Ciao! Sono il tuo assistente cucina. Conosco tutto quello che hai in dispensa e sono pronto ad aiutarti. Cosa ti va di preparare? 😊']]
-    ];
 
     // Add conversation history
     foreach ($history as $msg) {
@@ -2783,13 +2922,16 @@ PROMPT;
 
     $payload = [
         'contents' => $contents,
+        'systemInstruction' => [
+            'parts' => [['text' => $systemPrompt]]
+        ],
         'generationConfig' => [
             'temperature' => 0.8,
-            'maxOutputTokens' => 1500
+            'maxOutputTokens' => 4096
         ]
     ];
 
-    $result   = callGeminiWithFallback($apiKey, $payload, 60);
+    $result   = callGeminiWithFallback($apiKey, $payload, 90);
     $httpCode = $result['http_code'];
 
     if ($httpCode !== 200) {
@@ -2947,8 +3089,8 @@ function generateRecipe(PDO $db): void {
         if (!empty($item['expiry_date']) && $daysLeft < 0) return 1;
         if (!empty($item['expiry_date']) && $daysLeft <= 3) return 2;
         if (!empty($item['expiry_date']) && $daysLeft <= 7) return 3;
+        if ($isOpen) return 3; // opened items: same priority as expiring this week — must be used soon
         if (!empty($item['expiry_date'])) return 4;
-        if ($isOpen) return 5;
         return 6;
     };
 
@@ -3003,13 +3145,12 @@ function generateRecipe(PDO $db): void {
     $priorityHeaders = [
         1 => 'SCADUTI — usa subito',
         2 => 'SCADENZA ≤3gg — priorità alta',
-        3 => 'SCADENZA ≤7gg',
+        3 => 'SCADENZA ≤7gg / APERTI — usa presto',
         4 => 'ALTRI CON SCADENZA',
-        5 => 'APERTI',
         6 => 'DISPENSA',
     ];
     // Limit groups to keep prompt compact:
-    //  1-3 (urgent): all items; 4 (has expiry): max 40; 5 (opened): all; 6 (pantry): max 20
+    //  1-3 (urgent+opened): all items; 4 (has expiry): max 40; 6 (pantry): max 20
     foreach ($priorityHeaders as $g => $header) {
         if (empty($priorityGroups[$g])) continue;
         $groupItems = $priorityGroups[$g];
@@ -3122,11 +3263,8 @@ function generateRecipe(PDO $db): void {
     }
     
     // Appliances
-    $appliancesText = '';
-    if (!empty($appliances)) {
-        $appliancesText = "\n\nELETTRODOMESTICI: " . implode(', ', $appliances) . " (+ fornelli e forno). Usa SOLO questi.";
-    }
-    
+    $appliancesText = _buildAppliancesPrompt($appliances, compact: false);
+
     // Dietary restrictions
     $dietaryText = '';
     if (!empty($dietaryRestrictions)) {
@@ -3506,6 +3644,333 @@ PROMPT;
     }
 }
 
+// ===== CHAT: CONVERT CHAT RECIPE TO STRUCTURED RECIPE =====
+function chatToRecipe(PDO $db): void {
+    $apiKey = env('GEMINI_API_KEY');
+    if (empty($apiKey)) {
+        echo json_encode(['success' => false, 'error' => 'no_api_key']);
+        return;
+    }
+
+    $input = json_decode(file_get_contents('php://input'), true);
+    $replyText = trim($input['text'] ?? '');
+    $lang = recipeNormalizeLang($input['lang'] ?? 'it');
+
+    if (empty($replyText)) {
+        echo json_encode(['success' => false, 'error' => 'empty_text']);
+        return;
+    }
+
+    // Fetch full inventory — same query as generateRecipe
+    $stmt = $db->query("
+        SELECT p.id AS product_id, p.name, p.brand, p.category, i.quantity, p.unit, p.default_quantity, p.package_unit, i.location, i.expiry_date, i.opened_at,
+               CASE WHEN i.expiry_date IS NOT NULL THEN julianday(i.expiry_date) - julianday('now') ELSE 999 END AS days_left
+        FROM inventory i
+        JOIN products p ON p.id = i.product_id
+        WHERE i.quantity > 0
+        ORDER BY days_left ASC
+    ");
+    $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // Ask Gemini to convert the chat recipe text into the full structured recipe JSON.
+    // Prompt is tiny — no inventory sent to Gemini (PHP does all the matching below).
+    $prompt = <<<PROMPT
+Convert the recipe text below to a JSON object. Return ONLY the JSON, no markdown.
+
+Fields:
+- title: string
+- meal: null  (do NOT categorize — leave as null always)
+- persons: integer (number of servings/people, default 2 if not mentioned)
+- prep_time: string or null
+- cook_time: string or null
+- ingredients: array of {"name":"...","qty":"...","qty_number":0.0,"unit":"g|ml|pz|conf|kg|l","from_pantry":true}
+  — set from_pantry=true for ALL ingredients (pantry matching is done server-side)
+- steps: array of strings (one string per step, plain text without step numbers)
+- nutrition_note: string or null
+
+RECIPE TEXT:
+{$replyText}
+PROMPT;
+
+    $payload = [
+        'contents' => [['role' => 'user', 'parts' => [['text' => $prompt]]]],
+        'generationConfig' => ['temperature' => 0.1, 'maxOutputTokens' => 8192]
+    ];
+
+    $result = callGeminiWithFallback($apiKey, $payload, 45);
+
+    if ($result['http_code'] !== 200) {
+        echo json_encode(['success' => false, 'error' => $result['data']['error']['message'] ?? 'gemini_error']);
+        return;
+    }
+
+    $text = $result['data']['candidates'][0]['content']['parts'][0]['text'] ?? '';
+    if (empty($text)) {
+        echo json_encode(['success' => false, 'error' => 'gemini_error']);
+        return;
+    }
+
+    // Strip markdown code fences (handles ```json ... ``` anywhere in the response)
+    $text = preg_replace('/```(?:json)?\s*/i', '', $text);
+    $text = str_replace('```', '', $text);
+
+    // Extract the first complete JSON object from the text (ignores any preamble text)
+    $start = strpos($text, '{');
+    $end   = strrpos($text, '}');
+    if ($start === false || $end === false || $end <= $start) {
+        echo json_encode(['success' => false, 'error' => 'parse_error', 'raw' => mb_substr($text, 0, 500)]);
+        return;
+    }
+    $text = substr($text, $start, $end - $start + 1);
+
+    $recipe = json_decode($text, true);
+    if (!is_array($recipe) || empty($recipe['title'])) {
+        echo json_encode(['success' => false, 'error' => 'parse_error', 'raw' => mb_substr($text, 0, 500)]);
+        return;
+    }
+
+    // Enrich ingredients with product_id/location — same fuzzy-match as generateRecipe
+    if (!empty($recipe['ingredients'])) {
+        _enrichChatIngredients($recipe['ingredients'], $items);
+    }
+
+    echo json_encode(['success' => true, 'recipe' => $recipe]);
+}
+
+// ===== RECIPE FROM INGREDIENT =====
+function recipeFromIngredient(PDO $db): void {
+    $apiKey = env('GEMINI_API_KEY');
+    if (empty($apiKey)) {
+        echo json_encode(['success' => false, 'error' => 'no_api_key']);
+        return;
+    }
+
+    $input = json_decode(file_get_contents('php://input'), true);
+    $ingredientName = trim($input['ingredient'] ?? '');
+    if (empty($ingredientName)) {
+        echo json_encode(['success' => false, 'error' => 'empty_ingredient']);
+        return;
+    }
+
+    // Fetch inventory (same as generateRecipe)
+    $stmt = $db->query("
+        SELECT p.id AS product_id, p.name, p.brand, p.category, i.quantity, p.unit, p.default_quantity, p.package_unit, i.location, i.expiry_date, i.opened_at,
+               CASE WHEN i.expiry_date IS NOT NULL THEN julianday(i.expiry_date) - julianday('now') ELSE 999 END AS days_left
+        FROM inventory i
+        JOIN products p ON p.id = i.product_id
+        WHERE i.quantity > 0
+        ORDER BY days_left ASC
+    ");
+    $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    $safeName = htmlspecialchars($ingredientName, ENT_QUOTES, 'UTF-8');
+
+    $prompt = <<<PROMPT
+Generate a recipe in Italian that uses "{$safeName}" as a main ingredient.
+Return ONLY a JSON object, no markdown.
+
+Fields:
+- title: string (Italian recipe name)
+- meal: null  (do NOT categorize)
+- persons: 2
+- prep_time: string or null
+- cook_time: string or null
+- ingredients: array of {"name":"...","qty":"...","qty_number":0.0,"unit":"g|ml|pz|conf|kg|l","from_pantry":true}
+  — "{$safeName}" MUST be the first ingredient; set from_pantry=true for ALL
+- steps: array of strings (step text only, no numbers)
+- nutrition_note: string or null
+PROMPT;
+
+    $payload = [
+        'contents' => [['role' => 'user', 'parts' => [['text' => $prompt]]]],
+        'generationConfig' => ['temperature' => 0.7, 'maxOutputTokens' => 8192],
+    ];
+
+    $result = callGeminiWithFallback($apiKey, $payload, 45);
+
+    if ($result['http_code'] !== 200) {
+        echo json_encode(['success' => false, 'error' => $result['data']['error']['message'] ?? 'gemini_error']);
+        return;
+    }
+
+    $text = $result['data']['candidates'][0]['content']['parts'][0]['text'] ?? '';
+    if (empty($text)) {
+        echo json_encode(['success' => false, 'error' => 'gemini_error']);
+        return;
+    }
+
+    $text = preg_replace('/```(?:json)?\s*/i', '', $text);
+    $text = str_replace('```', '', $text);
+    $start = strpos($text, '{');
+    $end   = strrpos($text, '}');
+    if ($start === false || $end === false || $end <= $start) {
+        echo json_encode(['success' => false, 'error' => 'parse_error', 'raw' => mb_substr($text, 0, 500)]);
+        return;
+    }
+    $text = substr($text, $start, $end - $start + 1);
+
+    $recipe = json_decode($text, true);
+    if (!is_array($recipe) || empty($recipe['title'])) {
+        echo json_encode(['success' => false, 'error' => 'parse_error', 'raw' => mb_substr($text, 0, 500)]);
+        return;
+    }
+
+    if (!empty($recipe['ingredients'])) {
+        _enrichChatIngredients($recipe['ingredients'], $items);
+    }
+
+    echo json_encode(['success' => true, 'recipe' => $recipe]);
+}
+
+
+function _enrichChatIngredients(array &$ingredients, array $items): void {
+    if (empty($ingredients) || empty($items)) return;
+
+    // Build lookup
+    $itemsLookup = [];
+    foreach ($items as $item) {
+        $itemsLookup[] = [
+            'item' => $item,
+            'lower' => mb_strtolower(trim($item['name']), 'UTF-8'),
+            'words' => preg_split('/[\s,.\-\/]+/', mb_strtolower(trim($item['name']), 'UTF-8')),
+        ];
+    }
+
+    $aliases = [
+        'uovo' => ['uova','uovo','egg'],
+        'uova' => ['uovo','uova','egg'],
+        'latte' => ['latte','milk'],
+        'formaggio' => ['formaggio','cheese','philadelphia','mozzarella','parmigiano','grana','pecorino','ricotta','mascarpone','stracchino','gorgonzola'],
+        'pasta' => ['pasta','spaghetti','penne','fusilli','rigatoni','farfalle','tagliatelle','linguine','bucatini','orecchiette','paccheri','maccheroni'],
+        'pomodoro' => ['pomodoro','pomodori','tomato','passata','pelati','polpa'],
+        'cipolla' => ['cipolla','cipolle','onion'],
+        'aglio' => ['aglio','garlic'],
+        'burro' => ['burro','butter'],
+        'panna' => ['panna','cream','crema'],
+        'zucchero' => ['zucchero','sugar'],
+        'farina' => ['farina','flour'],
+        'olio' => ['olio','oil'],
+        'patata' => ['patata','patate','potato'],
+        'carota' => ['carota','carote','carrot'],
+        'sedano' => ['sedano','celery'],
+        'prezzemolo' => ['prezzemolo','parsley'],
+        'basilico' => ['basilico','basil'],
+    ];
+
+    foreach ($ingredients as &$ing) {
+        // Try to match ALL ingredients — from_pantry was set to true for all by chatExtractRecipe
+        // If no match is found, product_id stays unset → shown as 🛒 in frontend
+
+        $ingNameLower = mb_strtolower(trim($ing['name']), 'UTF-8');
+        $ingWords = preg_split('/[\s,.\-\/]+/', $ingNameLower);
+        $bestMatch = null;
+        $bestScore = 0;
+
+        foreach ($itemsLookup as $entry) {
+            $itemNameLower = $entry['lower'];
+            $itemWords = $entry['words'];
+            $score = 0;
+
+            if ($ingNameLower === $itemNameLower) {
+                $score = 100;
+            } elseif (mb_strpos($itemNameLower, $ingNameLower) !== false) {
+                $score = 80;
+            } elseif (mb_strpos($ingNameLower, $itemNameLower) !== false) {
+                $score = 70;
+            } else {
+                $expandedIngWords = $ingWords;
+                foreach ($ingWords as $w) {
+                    foreach ($aliases as $key => $group) {
+                        if (in_array($w, $group) || mb_strpos($w, $key) === 0 || mb_strpos($key, $w) === 0) {
+                            $expandedIngWords = array_merge($expandedIngWords, $group);
+                        }
+                    }
+                }
+                $expandedIngWords = array_unique($expandedIngWords);
+                $common = 0;
+                foreach ($expandedIngWords as $ew) {
+                    foreach ($itemWords as $iw) {
+                        $minLen = min(mb_strlen($ew), mb_strlen($iw));
+                        if ($minLen >= 3) {
+                            $prefixLen = 0;
+                            for ($c = 0; $c < $minLen; $c++) {
+                                if (mb_substr($ew, $c, 1) === mb_substr($iw, $c, 1)) $prefixLen++;
+                                else break;
+                            }
+                            if ($prefixLen >= min(4, $minLen)) { $common++; break; }
+                        }
+                        if ($ew === $iw) { $common++; break; }
+                    }
+                }
+                if ($common > 0) {
+                    $score = ($common / max(count($ingWords), 1)) * 65;
+                    if (count($ingWords) > 0) {
+                        foreach ($itemWords as $iw) {
+                            if (mb_strpos($iw, $ingWords[0]) === 0 || mb_strpos($ingWords[0], $iw) === 0) {
+                                $score += 10; break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if ($score > $bestScore) {
+                $bestScore = $score;
+                $bestMatch = $entry['item'];
+            }
+        }
+
+        if ($bestMatch && $bestScore > 30) {
+            $ing['product_id'] = (int)$bestMatch['product_id'];
+            $ing['location'] = $bestMatch['location'];
+            $ing['inventory_unit'] = $bestMatch['unit'];
+            $ing['inventory_qty'] = (float)$bestMatch['quantity'];
+            $ing['default_quantity'] = (float)($bestMatch['default_quantity'] ?? 0);
+            $ing['package_unit'] = $bestMatch['package_unit'] ?? '';
+            $ing['available_qty'] = $bestMatch['quantity'] . ' ' . $bestMatch['unit'];
+            $ing['vacuum_sealed'] = !empty($bestMatch['vacuum_sealed']) ? 1 : 0;
+            if (!empty($bestMatch['brand'])) $ing['brand'] = $bestMatch['brand'];
+            if (!empty($bestMatch['expiry_date'])) $ing['expiry_date'] = $bestMatch['expiry_date'];
+
+            // Validate and convert qty_number to inventory unit
+            $qtyNum = (float)($ing['qty_number'] ?? 0);
+            $invUnit = $bestMatch['unit'] ?? 'pz';
+            $invQty = (float)$bestMatch['quantity'];
+
+            if ($qtyNum > 0) {
+                $recipeQty = $ing['qty'] ?? '';
+                $recipeUnit = '';
+                $recipeVal = 0;
+                if (preg_match('/(\d+[.,]?\d*)\s*(g|gr|gramm|kg|ml|l|litri|cl|pz|pezz|conf)/i', $recipeQty, $qm)) {
+                    $recipeVal = (float)str_replace(',', '.', $qm[1]);
+                    $ru = strtolower($qm[2]);
+                    if (strpos($ru, 'g') === 0) $recipeUnit = 'g';
+                    elseif ($ru === 'kg') { $recipeUnit = 'g'; $recipeVal *= 1000; }
+                    elseif ($ru === 'ml') $recipeUnit = 'ml';
+                    elseif ($ru === 'cl') { $recipeUnit = 'ml'; $recipeVal *= 10; }
+                    elseif ($ru === 'l' || strpos($ru, 'litr') === 0) { $recipeUnit = 'ml'; $recipeVal *= 1000; }
+                    elseif (strpos($ru, 'pz') === 0 || strpos($ru, 'pezz') === 0) $recipeUnit = 'pz';
+                    elseif (strpos($ru, 'conf') === 0) $recipeUnit = 'conf';
+                }
+                if ($recipeUnit && $recipeUnit !== $invUnit) {
+                    if ($recipeUnit === 'g' && $invUnit === 'g') $qtyNum = $recipeVal;
+                    elseif ($recipeUnit === 'g' && $invUnit === 'kg') $qtyNum = $recipeVal / 1000;
+                    elseif ($recipeUnit === 'ml' && $invUnit === 'ml') $qtyNum = $recipeVal;
+                    elseif ($recipeUnit === 'ml' && $invUnit === 'l') $qtyNum = $recipeVal / 1000;
+                    elseif ($invUnit === 'pz' || $invUnit === 'conf') {
+                        $defQty = (float)($bestMatch['default_quantity'] ?? 0);
+                        $qtyNum = $defQty > 0 ? max(0.25, round(($recipeVal / $defQty) * 4) / 4) : max(1, round($recipeVal / 100));
+                    }
+                }
+                if ($qtyNum > $invQty) $qtyNum = $invQty;
+                if ($recipeVal > 0 && $recipeUnit === $invUnit && $qtyNum < $recipeVal * 0.01) $qtyNum = $recipeVal;
+                $ing['qty_number'] = round($qtyNum, 3);
+            }
+        }
+    }
+    unset($ing);
+}
+
 // ===== RECIPE GENERATION — STREAMING AGENT =====
 function generateRecipeStream(PDO $db): void {
     // Override content-type for SSE before any output is sent
@@ -3561,8 +4026,8 @@ function generateRecipeStream(PDO $db): void {
         if (!empty($item['expiry_date']) && $daysLeft < 0) return 1;
         if (!empty($item['expiry_date']) && $daysLeft <= 3) return 2;
         if (!empty($item['expiry_date']) && $daysLeft <= 7) return 3;
+        if ($isOpen) return 3; // opened items: same priority as expiring this week — must be used soon
         if (!empty($item['expiry_date'])) return 4;
-        if ($isOpen) return 5;
         return 6;
     };
 
@@ -3597,7 +4062,7 @@ function generateRecipeStream(PDO $db): void {
     // Senza piano pasto: limiti moderati per ridurre token (ora safe grazie a thinkingBudget:0)
     $hasMealPlan = !empty($mealPlanType);
     $ingredientSections = [];
-    $priorityHeaders    = [1=>'SCADUTI — usa subito',2=>'SCADENZA ≤3gg — priorità alta',3=>'SCADENZA ≤7gg',4=>'ALTRI CON SCADENZA',5=>'APERTI',6=>'DISPENSA'];
+    $priorityHeaders    = [1=>'SCADUTI — usa subito',2=>'SCADENZA ≤3gg — priorità alta',3=>'SCADENZA ≤7gg / APERTI — usa presto',4=>'ALTRI CON SCADENZA',6=>'DISPENSA'];
     $totalIngredientsSent = 0;
     foreach ($priorityHeaders as $g => $header) {
         if (empty($priorityGroups[$g])) continue;
@@ -3679,7 +4144,7 @@ function generateRecipeStream(PDO $db): void {
     $optionLabels = ['veloce'=>'VELOCE: max 15-20 min totali.','pocafame'=>'POCA FAME: porzione leggera, snack o insalata.','scadenze'=>'PRIORITÀ SCADENZE: usa per primi i prodotti in scadenza.','salutare'=>'SALUTARE: ingredienti integrali, verdure, pochi grassi.','opened'=>'PRIORITÀ APERTI: usa per primi i prodotti [APERTO].','zerowaste'=>'ZERO SPRECHI: usa il più possibile ingredienti in scadenza.'];
     foreach ($options as $opt) { if (isset($optionLabels[$opt])) $extraRules[] = $optionLabels[$opt]; }
     $extraRulesText = !empty($extraRules)         ? "\n\nPREFERENZE DELL'UTENTE:\n" . implode("\n", $extraRules) : '';
-    $appliancesText = !empty($appliances)          ? "\n\nELETTRODOMESTICI: " . implode(', ', $appliances) . " (+ fornelli e forno). Usa SOLO questi." : '';
+    $appliancesText = _buildAppliancesPrompt($appliances, compact: false);
     $dietaryText    = !empty($dietaryRestrictions) ? "\n\nRESTRIZIONI ALIMENTARI:\n{$dietaryRestrictions}\nRispetta SEMPRE queste restrizioni." : '';
 
     $mealPlanTypeLabels = ['pasta'=>'Pasta (primo piatto a base di pasta)','riso'=>'Riso (risotto, insalata di riso, riso saltato, ecc.)','carne'=>'Carne (secondo piatto a base di carne)','pesce'=>'Pesce (secondo piatto a base di pesce o frutti di mare)','legumi'=>'Legumi (zuppa, insalata, hummus, pasta e fagioli, ecc.)','uova'=>'Uova (frittata, uova strapazzate, quiche, ecc.)','formaggio'=>'Formaggio (fonduta, gnocchi al formaggio, torta salata, ecc.)','pizza'=>'Pizza o focaccia (impastata in casa o usi ingredienti simili)','affettati'=>'Affettati (tagliere misto, piadina, panino, ecc.)','verdure'=>'Verdure (piatto principale a base di verdure, contorno abbondante)','zuppa'=>'Zuppa o minestra (zuppe, vellutate, minestrone)','insalata'=>'Insalata (insalata mista, insalata di riso o pasta, poke)','pane'=>'Pane / Sandwich (toast, tramezzino, bruschette)','dolce'=>'Dolce o dessert','libero'=>''];
@@ -4166,6 +4631,102 @@ function searchOpenFoodFacts(string $searchTerms, string $name, string $brand): 
     return $results;
 }
 
+/**
+ * Build a detailed appliances prompt fragment for Gemini recipe generation.
+ *
+ * For multi-function appliances (Cookeo, Bimby, Thermomix, Monsieur Cuisine, etc.)
+ * the prompt explicitly instructs the AI to consolidate as many steps as possible
+ * into that single machine rather than using multiple appliances or the stove.
+ *
+ * @param string[] $appliances  List of appliance names from user settings.
+ * @param bool     $compact     True = one-line format (chat); False = multi-line (recipe gen).
+ */
+function _buildAppliancesPrompt(array $appliances, bool $compact = false): string {
+    if (empty($appliances)) return '';
+
+    // Multi-function all-in-one cookers: can sauté, boil, steam, pressure-cook, blend, etc.
+    $multiFunction = [
+        'cookeo', 'bimby', 'thermomix', 'monsieur cuisine',
+        'bimby tm', 'vorwerk', 'instant pot', 'multicooker',
+        'robot da cucina', 'robot cucina',
+        'macchina del pane', 'bread machine',
+    ];
+
+    $detectedMulti = [];
+    foreach ($appliances as $a) {
+        $aLow = mb_strtolower(trim($a));
+        foreach ($multiFunction as $kw) {
+            if (str_contains($aLow, $kw)) {
+                $detectedMulti[] = $a;
+                break;
+            }
+        }
+    }
+
+    $allList = implode(', ', $appliances);
+
+    if (empty($detectedMulti)) {
+        // No multi-function appliance: standard wording
+        return $compact
+            ? "\nElettrodomestici disponibili: {$allList} (più fornelli e forno sempre disponibili)."
+            : "\n\nELETTRODOMESTICI: {$allList} (+ fornelli e forno). Usa SOLO questi.";
+    }
+
+    // Build capability hint per multi-function appliance
+    $capabilityMap = [
+        'cookeo'           => 'rosolare, stufare, cuocere a pressione, vapore, saltare, riscaldare',
+        'bimby'            => 'tritare, frullare, cuocere, soffriggere, vapore, impastare, pesare, emulsionare',
+        'thermomix'        => 'tritare, frullare, cuocere, soffriggere, vapore, impastare, pesare, emulsionare',
+        'monsieur cuisine' => 'tritare, frullare, cuocere, soffriggere, vapore, impastare, pesare',
+        'instant pot'      => 'rosolare, cuocere a pressione, stufare, vapore, slow cook, riscaldare',
+        'multicooker'      => 'rosolare, cuocere a pressione, stufare, vapore, slow cook',
+        'robot da cucina'  => 'tritare, frullare, cuocere, mescolare, impastare',
+        'robot cucina'     => 'tritare, frullare, cuocere, mescolare, impastare',
+        'macchina del pane'=> 'impastare, lievitare, cuocere pane (ordine ingredienti: liquidi → farina → sale → zucchero → lievito in cima; scegliere programma: Base, Integrale, Francese, Rapido, Dolce, Solo impasto)',
+        'bread machine'    => 'impastare, lievitare, cuocere pane (ordine: liquidi → farina → sale → zucchero → lievito in cima)',
+    ];
+
+    $multiDetails = [];
+    foreach ($detectedMulti as $a) {
+        $aLow = mb_strtolower(trim($a));
+        $cap = '';
+        foreach ($capabilityMap as $kw => $caps) {
+            if (str_contains($aLow, $kw)) { $cap = $caps; break; }
+        }
+        $multiDetails[] = $cap ? "{$a} ({$cap})" : $a;
+    }
+    $multiStr = implode(' e ', $multiDetails);
+
+    // The other (non-multi) appliances available as backup
+    $others = array_filter($appliances, fn($a) => !in_array($a, $detectedMulti));
+    $othersStr = !empty($others) ? ', ' . implode(', ', $others) . ' (accessori di supporto se serve)' : '';
+
+    if ($compact) {
+        // When multiple specialized appliances are present, list each with capabilities.
+        // Do NOT force-prefer one over another — the user may explicitly ask for a specific one.
+        if (count($detectedMulti) === 1) {
+            $single = $multiDetails[0];
+            return "\nElettrodomestici: {$allList}. Se la ricetta lo consente, preferisci usare {$single} per quanti più passaggi possibile.";
+        }
+        // Multiple specialized appliances: describe each, let the user's request decide
+        $multiStr = implode('; ', $multiDetails);
+        return "\nElettrodomestici: {$allList}. Apparecchi specializzati disponibili: {$multiStr}. Usa quello più adatto alla ricetta richiesta dall'utente, rispettando sempre la sua preferenza esplicita.";
+    }
+
+    $ruleLines = implode("\n", array_map(fn($d) => "   → {$d}", $multiDetails));
+    return <<<APPL
+
+ELETTRODOMESTICI DISPONIBILI: {$allList} (+ fornelli e forno se indispensabile).
+⚠️  REGOLA OBBLIGATORIA APPARECCHI MULTIFUNZIONE:
+   Hai a disposizione un apparecchio multifunzione potente. Devi usarlo per QUANTI PIÙ PASSI POSSIBILE.
+   Funzioni disponibili:
+{$ruleLines}{$othersStr}
+   → Ogni passaggio che l'apparecchio può fare DA SOLO va fatto lì, NON su fornelli/forno separati.
+   → Indica esplicitamente nelle istruzioni quale funzione/programma usare (es. "modalità Rosolare", "Turbo 10 sec", "Varoma 20 min").
+   → Usa fornelli/forno SOLO per operazioni che l'apparecchio non supporta fisicamente.
+APPL;
+}
+
 // ===== BRING! SHOPPING LIST INTEGRATION =====
 
 function bringAuth(): ?array {
@@ -4305,7 +4866,12 @@ function italianToBring(string $italianName): string {
 
     $genericQualifiers = [
         'dolce','salato','light','bio','classico','original','naturale','fresco','fresca',
-        'intero','intera','magro','magra','piccolo','piccola','grande','rosso','bianco'
+        'intero','intera','magro','magra','piccolo','piccola','grande','rosso','bianco',
+        // Generic descriptors that appear inside multi-word product names (e.g. "succo e polpa frutta",
+        // "muesli frutta secca") but do NOT represent the item category on their own.
+        // Pass 1 (exact match on shopping_name) still works correctly for truly generic items
+        // like shopping_name='Frutta' → it2de['frutta'] = 'Früchte'.
+        'frutta','verdura','frutti',
     ];
     $candidates = [];
     foreach ($catalog['it2de'] as $itLower => $deKey) {
@@ -4712,6 +5278,182 @@ function computeShoppingName(string $name, string $category = '', string $brand 
     return ucfirst($name);
 }
 
+/**
+ * Server-side Bring! cleanup: remove items from Bring! that the app auto-added
+ * but are no longer flagged by smart shopping (stock is now adequate).
+ * Called by the cron after recomputing the smart shopping cache.
+ * Returns a summary array for logging.
+ */
+function bringCleanupObsolete(PDO $db): array {
+    // Load the freshly-computed smart shopping cache
+    $cacheFile = __DIR__ . '/../data/smart_shopping_cache.json';
+    if (!file_exists($cacheFile)) return ['skipped' => 'no_cache'];
+    $smartData = json_decode(file_get_contents($cacheFile), true);
+    $smartItems = $smartData['items'] ?? [];
+
+    $auth = bringAuth();
+    if (!$auth) return ['skipped' => 'no_bring_auth'];
+    $listUUID = $auth['bringListUUID'];
+    if (empty($listUUID)) return ['skipped' => 'no_list_uuid'];
+
+    $bringData = bringRequest('GET', "https://api.getbring.com/rest/v2/bringlists/{$listUUID}");
+    if (!$bringData || !isset($bringData['purchase'])) return ['skipped' => 'bring_fetch_failed'];
+
+    // Reuse nameTokens closure
+    $stopwords = ['di','del','della','dei','il','la','le','lo','gli','un','una','e','con','per','da',
+                  'al','alla','in','su','se','che','non','ma','o','a','i','nel','nei','tra','delle',
+                  'degli','agli','dai','dalle','sui','sulle','sugli'];
+    $ntFn = function(string $name) use ($stopwords): array {
+        $name = mb_strtolower(trim($name));
+        $toks = preg_split('/[^a-z0-9àáâãäåèéêëìíîïòóôõöùúûü]+/u', $name, -1, PREG_SPLIT_NO_EMPTY);
+        return array_values(array_unique(array_filter($toks, fn($t) => mb_strlen($t) > 2 && !in_array($t, $stopwords))));
+    };
+
+    // Build smart map by shopping_name tokens AND by exact name.
+    // Exact match is tried first to prevent loose token collisions like
+    // 'Panna' (Bring! item, in stock) matching 'Panna da cucina' (depleted, critical)
+    // because they share the 'panna' token.
+    $smartByTok = [];
+    $smartByExactName = [];
+    foreach ($smartItems as $si) {
+        $sName = !empty($si['shopping_name']) ? $si['shopping_name'] : $si['name'];
+        $sNameNorm = strtolower(trim($sName));
+        if ($sNameNorm !== '') $smartByExactName[$sNameNorm] = $si;
+        foreach ($ntFn($sName) as $tok) {
+            if (!isset($smartByTok[$tok])) $smartByTok[$tok] = $si;
+        }
+    }
+
+    // App-added marker: the app always writes ⚡ 🟠 or 🛒 in the specification
+    $appMarkers = ['⚡', '🟠', '🛒'];
+
+    $toRemove = [];
+    foreach ($bringData['purchase'] as $bringItem) {
+        $spec    = $bringItem['specification'] ?? '';
+        $rawName = $bringItem['name'] ?? '';
+        $name    = bringToItalian($rawName);
+
+        // Only clean up items the app put there (identified by urgency markers in spec)
+        $isAppAdded = false;
+        foreach ($appMarkers as $m) {
+            if (mb_strpos($spec, $m) !== false) { $isAppAdded = true; break; }
+        }
+        if (!$isAppAdded) continue;
+
+        // Match against smart items: exact shopping_name first, then first-token fallback.
+        // Exact match prevents e.g. 'Panna' → 'Panna da cucina' via shared token 'panna'.
+        $nameToks = $ntFn($name);
+        $exactKey = strtolower(trim($name));
+        $smartSi  = $smartByExactName[$exactKey] ?? null;
+        if ($smartSi === null) {
+            $firstTok = $nameToks[0] ?? '';
+            $smartSi  = $firstTok ? ($smartByTok[$firstTok] ?? null) : null;
+        }
+
+        if ($smartSi !== null) {
+            // Still in smart_shopping with critical or high urgency → keep
+            if (in_array($smartSi['urgency'], ['critical', 'high'], true)) continue;
+            // Medium with low stock → keep
+            if ($smartSi['urgency'] === 'medium' && (float)($smartSi['pct_left'] ?? 100) < 60) continue;
+            // qty=0 → keep (genuinely out of stock)
+            if ((float)($smartSi['current_qty'] ?? 0) <= 0) continue;
+        }
+        // Not in smart (or low-urgency with stock) → schedule for removal
+
+        $toRemove[] = ['name' => $name, 'rawName' => $rawName];
+    }
+
+    $removed = 0;
+    $errors  = 0;
+    foreach ($toRemove as $item) {
+        // Try with the catalog key (rawName as returned from Bring! list)
+        $body   = http_build_query(['uuid' => $listUUID, 'remove' => $item['rawName']]);
+        $result = bringRequest('PUT', "https://api.getbring.com/rest/v2/bringlists/{$listUUID}", $body);
+
+        // Retry: if rawName is the Italian locale name, also try the German catalog key
+        if ($result === null) {
+            $catalogKey = italianToBring($item['name']);
+            if ($catalogKey !== $item['rawName']) {
+                $body   = http_build_query(['uuid' => $listUUID, 'remove' => $catalogKey]);
+                $result = bringRequest('PUT', "https://api.getbring.com/rest/v2/bringlists/{$listUUID}", $body);
+            }
+        }
+
+        if ($result !== null) $removed++;
+        else { $errors++; }
+
+        // Small delay between removals to avoid hammering the Bring! API
+        if (count($toRemove) > 3) usleep(300_000); // 300ms
+    }
+
+    return ['candidates' => count($toRemove), 'removed' => $removed, 'errors' => $errors];
+}
+
+/**
+ * Server-side Bring! auto-add: push critical/high smart_shopping items to Bring!
+ * that are not already on the list. Called by the cron alongside cleanup.
+ */
+function bringAutoAddCritical(PDO $db): array {
+    $cacheFile = __DIR__ . '/../data/smart_shopping_cache.json';
+    if (!file_exists($cacheFile)) return ['skipped' => 'no_cache'];
+    $smartData = json_decode(file_get_contents($cacheFile), true);
+    $smartItems = $smartData['items'] ?? [];
+
+    $auth = bringAuth();
+    if (!$auth) return ['skipped' => 'no_bring_auth'];
+    $listUUID = $auth['bringListUUID'];
+    if (empty($listUUID)) return ['skipped' => 'no_list_uuid'];
+
+    $bringData = bringRequest('GET', "https://api.getbring.com/rest/v2/bringlists/{$listUUID}");
+    if (!$bringData || !isset($bringData['purchase'])) return ['skipped' => 'bring_fetch_failed'];
+
+    // Build set of already-present items (by Bring! key)
+    $onBring = [];
+    foreach ($bringData['purchase'] as $bi) {
+        $onBring[strtolower($bi['name'] ?? '')] = true;
+    }
+
+    $added = 0;
+    $updated = 0;
+    foreach ($smartItems as $si) {
+        if (!in_array($si['urgency'], ['critical', 'high'], true)) continue;
+
+        $genericName = $si['shopping_name'] ?: $si['name'];
+        $bringName   = italianToBring($genericName);
+        $bringKey    = strtolower($bringName);
+
+        // Build urgency spec
+        $urgencyLabel = $si['urgency'] === 'critical' ? '⚡ Urgente' : '🟠 Presto';
+        $spec = $urgencyLabel;
+        if (!empty($si['name']) && $si['name'] !== $genericName) {
+            $spec = $si['name'] . ($si['brand'] ? ' · ' . $si['brand'] : '') . ' — ' . $urgencyLabel;
+        }
+        if (!empty($si['suggested_qty'])) {
+            $spec .= ' · 🛒 ' . ($si['qty_label'] ?? 'Almeno: ' . $si['suggested_qty'] . ' ' . ($si['unit'] ?? 'pz'));
+        }
+
+        if (isset($onBring[$bringKey])) {
+            // Update spec if it changed
+            $existingSpec = '';
+            foreach ($bringData['purchase'] as $bi) {
+                if (strtolower($bi['name'] ?? '') === $bringKey) { $existingSpec = $bi['specification'] ?? ''; break; }
+            }
+            if ($existingSpec !== $spec) {
+                $body = http_build_query(['uuid' => $listUUID, 'purchase' => $bringName, 'specification' => $spec]);
+                bringRequest('PUT', "https://api.getbring.com/rest/v2/bringlists/{$listUUID}", $body);
+                $updated++;
+            }
+            continue;
+        }
+
+        $body = http_build_query(['uuid' => $listUUID, 'purchase' => $bringName, 'specification' => $spec]);
+        $r = bringRequest('PUT', "https://api.getbring.com/rest/v2/bringlists/{$listUUID}", $body);
+        if ($r !== null) $added++;
+    }
+
+    return ['added' => $added, 'updated' => $updated];
+}
+
 function bringGetList(): void {
     $auth = bringAuth();
     if (!$auth) {
@@ -4882,16 +5624,29 @@ function bringRemoveItem(): void {
         return;
     }
     
-    // Use rawName (German key) if provided, otherwise try to map
-    $rawName = $input['rawName'] ?? '';
-    $removeName = !empty($rawName) ? $rawName : italianToBring($name);
-    
-    $body = http_build_query([
-        'uuid' => $listUUID,
-        'remove' => $removeName,
-    ]);
-    
+    // Use rawName (German catalog key) if provided, otherwise derive from Italian name.
+    // Always try both the catalog key AND the Italian name as-stored, because:
+    // – Catalog items: Bring! stores them internally by German key (e.g. "Käse" for "Formaggio")
+    //   but the list API returns them in the user's locale ("Formaggio").
+    //   Removal only works with the German key.
+    // – Custom items (not in catalog): stored and removed by the name as entered.
+    $rawName     = $input['rawName'] ?? '';
+    $catalogKey  = italianToBring($name);     // German key from catalog (may equal $name if not found)
+    $removeName  = !empty($rawName) ? $rawName : $catalogKey;
+
+    $listUUID = $auth['bringListUUID'];
+
+    // Try primary removal (catalog key or provided rawName)
+    $body   = http_build_query(['uuid' => $listUUID, 'remove' => $removeName]);
     $result = bringRequest('PUT', "https://api.getbring.com/rest/v2/bringlists/{$listUUID}", $body);
+
+    // If the primary key was the catalog key and failed, retry with the Italian name as-is
+    // (for custom non-catalog items stored under their Italian name)
+    if ($result === null && $removeName !== $name) {
+        $body   = http_build_query(['uuid' => $listUUID, 'remove' => $name]);
+        $result = bringRequest('PUT', "https://api.getbring.com/rest/v2/bringlists/{$listUUID}", $body);
+    }
+
     if ($result !== null) {
         // Invalidate cache so next smart_shopping request reflects the updated Bring! list
         @unlink(__DIR__ . '/../data/smart_shopping_cache.json');
@@ -5040,6 +5795,11 @@ function invalidateSmartShoppingCache(): void {
 }
 
 function smartShoppingCached(PDO $db): void {
+    // Never let the browser or proxy cache this — urgency is time-sensitive
+    header('Cache-Control: no-cache, no-store, must-revalidate');
+    header('Pragma: no-cache');
+    header('Expires: 0');
+
     $cacheFile = __DIR__ . '/../data/smart_shopping_cache.json';
     $maxAge    = 3 * 60; // 3 minutes — keep urgency fresh
 
@@ -5115,11 +5875,22 @@ function smartShopping(PDO $db): void {
     $today = date('Y-m-d');
 
     // Helper: extract significant tokens from a product name (mirrors JS _nameTokens)
+    // Includes synonym expansion so French/Italian variants match (e.g. yaourt = yogurt)
     $nameTokens = function(string $name): array {
         $stop = ['di','del','della','dei','degli','delle','da','in','con','per','su',
                  'a','e','il','lo','la','i','gli','le','un','uno','una','al','alle','agli','allo'];
+        $synonyms = [
+            'yaourt' => 'yogurt', 'yogourt' => 'yogurt',
+            'lait'   => 'latte',  'fromage'  => 'formaggio',
+            'sucre'  => 'zucchero', 'jus'    => 'succo',
+            'orange' => 'arancia', 'pomme'   => 'mela',
+            'poire'  => 'pera',
+        ];
         $tokens = preg_split('/\s+/', strtolower(preg_replace('/[^\p{L}\s]/u', ' ', $name)));
-        return array_values(array_filter($tokens, fn($t) => strlen($t) > 2 && !in_array($t, $stop)));
+        $tokens = array_filter($tokens, fn($t) => strlen($t) > 2 && !in_array($t, $stop));
+        // Apply synonyms
+        $tokens = array_map(fn($t) => $synonyms[$t] ?? $t, $tokens);
+        return array_values(array_unique($tokens));
     };
 
     // 1. Get all products with their inventory and transaction history
@@ -5135,7 +5906,8 @@ function smartShopping(PDO $db): void {
         SELECT i.product_id, SUM(i.quantity) as total_qty, 
                MIN(i.expiry_date) as nearest_expiry,
                GROUP_CONCAT(DISTINCT i.location) as locations,
-               MAX(i.opened_at) as opened_at
+               MAX(i.opened_at) as opened_at,
+               SUM(CASE WHEN i.expiry_date IS NULL OR i.expiry_date >= date('now') THEN i.quantity ELSE 0 END) as fresh_qty
         FROM inventory i
         WHERE i.quantity > 0
         GROUP BY i.product_id
@@ -5145,16 +5917,16 @@ function smartShopping(PDO $db): void {
         $inventory[$inv['product_id']] = $inv;
     }
 
-    // 3. Get transaction stats per product
+    // 3. Get transaction stats per product (exclude undone=1 corrections)
     $txStmt = $db->query("
         SELECT product_id,
-               COUNT(CASE WHEN type IN ('out','waste') THEN 1 END) as use_count,
-               SUM(CASE WHEN type IN ('out','waste') THEN quantity ELSE 0 END) as total_used,
-               COUNT(CASE WHEN type = 'in' THEN 1 END) as buy_count,
-               SUM(CASE WHEN type = 'in' THEN quantity ELSE 0 END) as total_bought,
-               MIN(CASE WHEN type = 'in' THEN created_at END) as first_in,
-               MAX(CASE WHEN type = 'in' THEN created_at END) as last_in,
-               MAX(CASE WHEN type IN ('out','waste') THEN created_at END) as last_out
+               COUNT(CASE WHEN type IN ('out','waste') AND undone=0 THEN 1 END) as use_count,
+               SUM(CASE WHEN type IN ('out','waste') AND undone=0 THEN quantity ELSE 0 END) as total_used,
+               COUNT(CASE WHEN type = 'in' AND undone=0 THEN 1 END) as buy_count,
+               SUM(CASE WHEN type = 'in' AND undone=0 THEN quantity ELSE 0 END) as total_bought,
+               MIN(CASE WHEN type = 'in' AND undone=0 THEN created_at END) as first_in,
+               MAX(CASE WHEN type = 'in' AND undone=0 THEN created_at END) as last_in,
+               MAX(CASE WHEN type IN ('out','waste') AND undone=0 THEN created_at END) as last_out
         FROM transactions
         GROUP BY product_id
     ");
@@ -5185,11 +5957,23 @@ function smartShopping(PDO $db): void {
     //   'Aglio rosso' + 'Aglio' share 'aglio'
     //   'Latte di Montagna' + 'Latte Parzialmente Scremato' share 'latte'
     $stockByAnyToken = [];
+    // Also build stockByShoppingName: normalized generic name → total qty.
+    // And freshStockByShoppingName: same but only counting non-expired batches.
+    $stockByShoppingName = [];
+    $freshStockByShoppingName = [];
     foreach ($products as $pStock) {
         $qty = isset($inventory[$pStock['id']]) ? (float)$inventory[$pStock['id']]['total_qty'] : 0;
         if ($qty <= 0) continue;
         foreach ($nameTokens($pStock['name']) as $tok) {
             $stockByAnyToken[$tok] = ($stockByAnyToken[$tok] ?? 0) + $qty;
+        }
+        $sName = strtolower(trim($pStock['shopping_name'] ?? ''));
+        if ($sName !== '') {
+            $stockByShoppingName[$sName] = ($stockByShoppingName[$sName] ?? 0) + $qty;
+            $fQty = isset($inventory[$pStock['id']]) ? (float)($inventory[$pStock['id']]['fresh_qty'] ?? $qty) : 0;
+            if ($fQty > 0) {
+                $freshStockByShoppingName[$sName] = ($freshStockByShoppingName[$sName] ?? 0) + $fQty;
+            }
         }
     }
 
@@ -5220,8 +6004,19 @@ function smartShopping(PDO $db): void {
         $lastOut = $tx && $tx['last_out'] ? strtotime($tx['last_out']) : null;
         $daysSinceFirst = $firstIn ? max(1, ($now - $firstIn) / 86400) : 999;
 
-        // Average daily consumption rate
-        $dailyRate = $daysSinceFirst < 999 && $totalUsed > 0 ? $totalUsed / $daysSinceFirst : 0;
+        // Average daily consumption rate.
+        // Use the "effective tracking period" (first purchase → last activity) rather than
+        // first purchase → now, so idle periods after last use don't deflate the rate.
+        // Example: Aglio bought 60 days ago but last used 34 days ago → use 34-day window.
+        $lastActivity = max($lastIn ?? 0, $lastOut ?? 0);
+        $activitySpan = ($firstIn && $lastActivity > $firstIn) ? ($lastActivity - $firstIn) : 0;
+        // Guard: if all activity fits within 24h (e.g. bought & consumed same day / seconds apart),
+        // effectiveDays would collapse to 1 → wildly inflated daily rate (e.g. Pizza: in+out 9s apart).
+        // Fall back to daysSinceFirst (first purchase → now) for a conservative estimate.
+        $effectiveDays = ($activitySpan >= 86400)
+            ? max(1, $activitySpan / 86400)
+            : $daysSinceFirst;
+        $dailyRate = $effectiveDays < 999 && $totalUsed > 0 ? $totalUsed / $effectiveDays : 0;
 
         // Days of stock remaining
         $daysLeft = ($dailyRate > 0 && $qty > 0) ? $qty / $dailyRate : ($qty > 0 ? 999 : 0);
@@ -5232,6 +6027,9 @@ function smartShopping(PDO $db): void {
         $isExpired = $daysToExpiry < 0;
         $isExpiringSoon = !$isExpired && $daysToExpiry <= 3;
 
+        // Fresh (non-expired) quantity — used for suppression when only part of stock is expired
+        $freshQty = $inv ? (float)($inv['fresh_qty'] ?? $qty) : 0;
+
         // --- Stock level assessment ---
         // percentage_left: how much is left vs typical purchase size
         // Use average of totalBought/buyCount if available, else default_quantity, else best-guess from defQty or 1
@@ -5239,6 +6037,8 @@ function smartShopping(PDO $db): void {
             ? $totalBought / $buyCount
             : ($defQty > 0 ? $defQty : max(1, $qty)); // avoid inflating pctLeft for products with no history
         $pctLeft = $refQty > 0 ? min(200, ($qty / $refQty) * 100) : ($qty > 0 ? 100 : 0);
+        // pctLeft based on FRESH (non-expired) stock only — used for expiry-aware suppression
+        $freshPctLeft = $refQty > 0 ? min(200, ($freshQty / $refQty) * 100) : ($freshQty > 0 ? 100 : 0);
 
         // Cap daysLeft at a reasonable ceiling to avoid 999-day noise in reason strings
         $daysLeft = min($daysLeft, 365);
@@ -5280,8 +6080,26 @@ function smartShopping(PDO $db): void {
                                 'bianco','rosso','nero','giallo','verde','misto','dolce','light'];
             $pToks = array_diff($nameTokens($p['name']), $coverageGeneric);
             $coveredByEquivalent = false;
-            foreach ($pToks as $tok) {
-                if (($stockByAnyToken[$tok] ?? 0) > 0) { $coveredByEquivalent = true; break; }
+            // Products exhausted within the last 14 days bypass token-based suppression:
+            // if the user just finished a specific product, they likely need to restock it
+            // regardless of whether a vague equivalent token exists in another product.
+            $recentlyExhausted = $lastOut && ($now - $lastOut) / 86400 <= 14;
+            if (!$recentlyExhausted) {
+                foreach ($pToks as $tok) {
+                    if (($stockByAnyToken[$tok] ?? 0) > 0) { $coveredByEquivalent = true; break; }
+                }
+            }
+            // Also check shopping_name coverage: if this depleted product has a generic name
+            // (e.g. "Formaggio") and there's stock of ANY product with the same generic name,
+            // the need is covered. This catches "Bel Paese" → covered by "Formaggio Gouda" in stock,
+            // "Biscotti Pastefrolle" → covered by "Frollini..." (both shopping_name="Biscotti"), etc.
+            // NOTE: recentlyExhausted does NOT bypass this check — same-family stock always suppresses.
+            // recentlyExhausted only bypasses the loose token-based check above.
+            if (!$coveredByEquivalent) {
+                $sName = strtolower(trim($p['shopping_name'] ?? ''));
+                if ($sName !== '' && ($stockByShoppingName[$sName] ?? 0) > 0) {
+                    $coveredByEquivalent = true;
+                }
             }
             if ($coveredByEquivalent) continue;
 
@@ -5318,12 +6136,22 @@ function smartShopping(PDO $db): void {
             }
         }
 
-        // Almost finished — only flag if usage frequency justifies it
-        if ($qty > 0 && $pctLeft <= 15 && $isRegular) {
+        // Almost finished — only flag if usage frequency justifies it.
+        // Suppress if the same shopping_name family has adequate stock from OTHER products
+        // (e.g. "Burro g" at 12% but "Burro conf" at 99% → no need to flag).
+        $sNameLow = strtolower(trim($p['shopping_name'] ?? ''));
+        $familyOtherStock = ($sNameLow !== '') ? max(0, ($stockByShoppingName[$sNameLow] ?? 0) - $qty) : 0;
+        // For g/ml/kg/l: any conf/pz family stock ≥ 0.5 means a package is available.
+        // For conf/pz: needs at least 1 full unit from other family products.
+        $familyCovered = $sNameLow !== '' && $qty > 0 && (
+            (!in_array($unit, ['conf', 'pz']) && $familyOtherStock >= 0.5) ||
+            (in_array($unit, ['conf', 'pz']) && $familyOtherStock >= 1.0)
+        );
+        if (!$familyCovered && $qty > 0 && $pctLeft <= 15 && $isRegular) {
             $urgency = $isFrequent ? 'high' : 'medium';
             $reasons[] = 'Quasi finito (' . round($pctLeft) . '%)';
             $score += 80;
-        } elseif ($qty > 0 && $pctLeft <= 30 && $isRegular) {
+        } elseif (!$familyCovered && $qty > 0 && $pctLeft <= 30 && $isRegular) {
             if ($dailyRate > 0 && $daysLeft <= 5 && $isFrequent) {
                 $urgency = 'high';
                 $reasons[] = 'Finisce tra ~' . round($daysLeft) . 'gg';
@@ -5341,10 +6169,26 @@ function smartShopping(PDO $db): void {
 
         // Expiring soon or expired (needs replacement) — valid regardless of frequency
         if ($isExpired && $qty > 0) {
-            $urgency = 'critical';
-            $reasons[] = 'Scaduto!';
-            $score += 90;
-        } elseif ($isExpiringSoon && $qty > 0) {
+            // Check if the product's shopping_name FAMILY has adequate FRESH stock
+            // from other (non-expired) products. If so, no need to buy more.
+            $sNameKey = strtolower(trim($p['shopping_name'] ?? ''));
+            $familyFreshQty = $sNameKey !== '' ? ($freshStockByShoppingName[$sNameKey] ?? 0) : 0;
+            // Subtract this product's own qty (it is expired, so fresh_qty=0 for it anyway)
+            $refQtyLocal = $refQty > 0 ? $refQty : 1;
+            $familyFreshPct = min(200, ($familyFreshQty / $refQtyLocal) * 100);
+
+            if (($justRestocked && $freshPctLeft >= 50) || $familyFreshPct >= 50) {
+                // Fresh stock from this product or same-family products is adequate.
+                // The expired batch will show in the dashboard expiry banner — don't add to shopping list.
+            } else {
+                $urgency = 'critical';
+                $reasons[] = 'Scaduto!';
+                $score += 90;
+            }
+        } elseif ($isExpiringSoon && $qty > 0 && $pctLeft < 50) {
+            // Only flag "expiring soon" if stock is also low (<50%). If you have plenty of
+            // stock (e.g. just bought fresh produce that naturally expires in 3 days), the
+            // shopping list is not the right place — the expiry banner handles it.
             if ($urgency === 'none') $urgency = 'medium';
             $reasons[] = 'Scade tra ' . max(0, round($daysToExpiry)) . 'gg';
             $score += 40;
@@ -5417,7 +6261,29 @@ function smartShopping(PDO $db): void {
 
         if ($urgency === 'none') continue;
 
-        // Boost score for very frequent items
+        // Family stock coverage: suppress items covered by other products in the same generic family.
+        // For non-expired items: suppress if family has other stock (already bought an equivalent).
+        // For expired items: suppress if the family has FRESH stock >= the expired qty in other products
+        //   e.g. Minestrone tradizione (expired 1/5) but Minesteone 12 verdure + Buon Minestrone = 590g → suppress
+        // Critical-without-family-cover always shows so user knows something needs replacing.
+        $sNameFamily = strtolower(trim($p['shopping_name'] ?? ''));
+        if ($sNameFamily !== '') {
+            if (!$isExpired && $urgency !== 'critical') {
+                $familyTotal = $stockByShoppingName[$sNameFamily] ?? 0;
+                $otherFamilyQty = $familyTotal - $qty;
+                if ($otherFamilyQty > 0) {
+                    continue;
+                }
+            } elseif ($isExpired) {
+                // For expired: check if OTHER family members have fresh stock covering the expired amount
+                $familyFreshTotal = $freshStockByShoppingName[$sNameFamily] ?? 0;
+                // freshStockByShoppingName counts this product's fresh_qty too (which is 0 if all expired)
+                // So if familyFreshTotal > 0 it means OTHER products in family have fresh stock
+                if ($familyFreshTotal > 0) {
+                    continue; // family has fresh stock → expired product is covered
+                }
+            }
+        }
         if ($useCount >= 8) $score += 15;
         elseif ($useCount >= 5) $score += 10;
 
@@ -5429,7 +6295,9 @@ function smartShopping(PDO $db): void {
 
         // "Just restocked" suppression: if bought in the last 3 days AND stock is above 50%
         // of reference qty, skip non-expiry urgency flags. The product doesn't need rebuying yet.
-        if ($justRestocked && $pctLeft >= 50 && !$isExpired && !$isExpiringSoon) {
+        // Note: isExpiringSoon is intentionally excluded — if you have ≥50% stock it was already
+        // filtered above (pctLeft < 50 required for expiringSoon urgency).
+        if ($justRestocked && $pctLeft >= 50 && !$isExpired) {
             continue;
         }
 
@@ -5848,6 +6716,8 @@ function chatSave(PDO $db): void {
             $stmt->execute([$msg['role'], $msg['text']]);
         }
     }
+    // Prune: keep only the last 200 messages (cap to avoid unbounded growth)
+    $db->exec("DELETE FROM chat_messages WHERE id NOT IN (SELECT id FROM chat_messages ORDER BY id DESC LIMIT 200)");
     echo json_encode(['success' => true]);
 }
 
@@ -6563,6 +7433,59 @@ PROMPT;
 }
 
 /**
+/**
+ * GET /api/?action=guess_category&name=...
+ * Returns the macro-category for a product name, using a file cache + Gemini AI fallback.
+ * Response: { category: string }
+ */
+function guessCategoryFromAI(): void {
+    $name = trim($_GET['name'] ?? '');
+    if ($name === '') { echo json_encode(['category' => 'altro']); return; }
+
+    // Load cache
+    $cache = [];
+    if (file_exists(CATEGORY_CACHE_PATH)) {
+        $cache = json_decode(file_get_contents(CATEGORY_CACHE_PATH), true) ?? [];
+    }
+    $key = md5(mb_strtolower($name));
+    if (isset($cache[$key])) { echo json_encode(['category' => $cache[$key]]); return; }
+
+    $apiKey = env('GEMINI_API_KEY', '');
+    if ($apiKey === '') { echo json_encode(['category' => 'altro']); return; }
+
+    $cats   = 'latticini, carne, pesce, frutta, verdura, pasta, pane, surgelati, bevande, condimenti, snack, conserve, cereali, igiene, pulizia, altro';
+    $prompt = "Sei un classificatore di prodotti alimentari e domestici italiani.\n"
+            . "Classifica il prodotto \"" . addslashes($name) . "\" in UNA di queste categorie esatte: $cats.\n"
+            . "Rispondi con SOLO la parola chiave della categoria, senza spiegazioni né punteggiatura aggiuntiva.";
+
+    $payload = [
+        'contents'           => [['parts' => [['text' => $prompt]]]],
+        'generationConfig'   => [
+            'temperature'   => 0,
+            'maxOutputTokens' => 20,
+            'thinkingConfig'  => ['thinkingBudget' => 0],
+        ],
+    ];
+
+    $result = callGeminiWithFallback($apiKey, $payload, 10);
+    $raw    = strtolower(trim($result['data']['candidates'][0]['content']['parts'][0]['text'] ?? ''));
+    $raw    = preg_replace('/[^a-z_ ]/', '', $raw);
+    $raw    = trim($raw);
+
+    $valid  = ['latticini','carne','pesce','frutta','verdura','pasta','pane','surgelati',
+               'bevande','condimenti','snack','conserve','cereali','igiene','pulizia','altro'];
+    $cat    = in_array($raw, $valid, true) ? $raw : 'altro';
+
+    // Persist to cache
+    $cache[$key] = $cat;
+    @file_put_contents(CATEGORY_CACHE_PATH, json_encode($cache, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+
+    echo json_encode(['category' => $cat]);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
  * GET /api/?action=get_shopping_price
  * POST body: { name, quantity, unit, default_quantity, package_unit, country, currency, lang, force_refresh }
  *
@@ -6583,6 +7506,12 @@ function getShoppingPrice(PDO $db): void {
 
     if (empty($name)) {
         echo json_encode(['success' => false, 'error' => 'missing name']);
+        return;
+    }
+
+    // Guard: price estimation requires Gemini API key
+    if (empty(env('GEMINI_API_KEY'))) {
+        echo json_encode(['success' => false, 'error' => 'no_api_key']);
         return;
     }
 
