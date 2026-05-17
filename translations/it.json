@@ -1212,6 +1212,7 @@
     "check_backups": "Dir backup",
     "check_write_test": "Test scrittura disco",
     "check_disk_space": "Spazio disco",
+    "check_db_legacy": "DB legacy (dispensa.db)",
     "check_db_connect": "Connessione database",
     "check_db_tables": "Tabelle database",
     "check_db_integrity": "Integrità database",
@@ -1222,6 +1223,8 @@
     "check_gemini": "Chiave Gemini AI",
     "check_bring_creds": "Credenziali Bring!",
     "check_bring_token": "Token Bring!",
+    "check_tts": "URL Text-to-Speech",
+    "check_scale": "Gateway bilancia",
     "check_curl_ssl": "cURL SSL",
     "check_internet": "Connessione internet",
     "fresh_install": "nuovo impianto",
@@ -1229,7 +1232,9 @@
     "all_ok": "Sistema OK",
     "critical_error_short": "Errore critico",
     "critical_error": "Errore critico: l'app non può avviarsi. Controlla i log del server.",
-    "error_network": "Impossibile contattare il server. Controlla la connessione di rete.",
+    "critical_error_intro": "L'app non può avviarsi a causa dei seguenti problemi:",
+    "error_network": "Impossibile contattare il server.",
+    "error_network_detail": "Il browser non riesce a raggiungere il server PHP.\n\nPossibili cause:\n• Il server Apache/PHP non è in esecuzione\n• Problema di rete o firewall\n• URL dell'app non corretta\n\nControlla che il server sia avviato e riprova.",
     "retry": "Riprova"
   }
 }

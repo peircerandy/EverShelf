@@ -110,6 +110,10 @@ if (($_GET['action'] ?? '') === 'ping') {
 if (($_GET['action'] ?? '') === 'health_check') {
     $checks = [];
 
+    // ── Helper: read .env values without triggering app init ─────────────────
+    $envVals = loadEnv(); // already cached by loadEnv()
+    $envGet  = fn($k) => $envVals[$k] ?? '';
+
     // ── 1. PHP version ────────────────────────────────────────────────────────
     $checks['php_version'] = [
         'ok'    => version_compare(PHP_VERSION, '8.0.0', '>='),
@@ -127,28 +131,16 @@ if (($_GET['action'] ?? '') === 'health_check') {
     }
 
     // ── 4. PHP runtime configuration ─────────────────────────────────────────
-    // Memory limit
-    $memRaw = ini_get('memory_limit');
+    $memRaw   = ini_get('memory_limit');
     $memBytes = (function ($v) {
-        $v    = trim($v);
-        if ($v === '-1') return PHP_INT_MAX;
-        $unit = strtolower(substr($v, -1));
-        $num  = (int) $v;
-        return match ($unit) { 'g' => $num * 1073741824, 'm' => $num * 1048576, 'k' => $num * 1024, default => $num };
+        $v = trim($v); if ($v === '-1') return PHP_INT_MAX;
+        $u = strtolower(substr($v, -1)); $n = (int)$v;
+        return match($u) { 'g' => $n*1073741824, 'm' => $n*1048576, 'k' => $n*1024, default => $n };
     })($memRaw);
-    $checks['php_memory'] = ['ok' => $memBytes >= 64 * 1048576, 'value' => $memRaw, 'optional' => true];
-
-    // Max execution time
-    $maxExec = (int) ini_get('max_execution_time');
-    $checks['php_max_exec'] = [
-        'ok'       => $maxExec === 0 || $maxExec >= 30,
-        'value'    => $maxExec === 0 ? '∞' : $maxExec . 's',
-        'optional' => true,
-    ];
-
-    // Upload size
-    $uploadRaw = ini_get('upload_max_filesize');
-    $checks['php_upload'] = ['ok' => true, 'value' => $uploadRaw, 'optional' => true];
+    $checks['php_memory']   = ['ok' => $memBytes >= 64*1048576, 'value' => $memRaw, 'optional' => true];
+    $maxExec                = (int) ini_get('max_execution_time');
+    $checks['php_max_exec'] = ['ok' => $maxExec === 0 || $maxExec >= 30, 'value' => $maxExec === 0 ? '∞' : $maxExec.'s', 'optional' => true];
+    $checks['php_upload']   = ['ok' => true, 'value' => ini_get('upload_max_filesize'), 'optional' => true];
 
     // ── 5. data/ directory ────────────────────────────────────────────────────
     $dataDir = __DIR__ . '/../data';
@@ -158,13 +150,24 @@ if (($_GET['action'] ?? '') === 'health_check') {
 
     // data/rate_limits/
     $rlDir = $dataDir . '/rate_limits';
-    if (!is_dir($rlDir)) @mkdir($rlDir, 0775, true);
+    if (!is_dir($rlDir) && $dataDirOk) @mkdir($rlDir, 0775, true);
     $checks['data_rate_limits'] = ['ok' => is_dir($rlDir) && is_writable($rlDir), 'optional' => true];
 
-    // data/backups/
-    $bkDir = $dataDir . '/backups';
-    if (!is_dir($bkDir)) @mkdir($bkDir, 0775, true);
-    $checks['data_backups'] = ['ok' => is_dir($bkDir) && is_writable($bkDir), 'optional' => true];
+    // data/backups/ — written by cron as root; just verify dir exists and has recent files
+    $bkDir       = $dataDir . '/backups';
+    $bkDirExists = is_dir($bkDir);
+    $bkFiles     = $bkDirExists ? array_filter(scandir($bkDir), fn($f) => str_ends_with($f, '.db')) : [];
+    $lastBkTime  = $bkDirExists && $bkFiles
+        ? max(array_map(fn($f) => filemtime($bkDir.'/'.$f), $bkFiles))
+        : 0;
+    $bkRecent    = $lastBkTime > 0 && (time() - $lastBkTime) < 86400*2; // within 2 days
+    $bkCount     = count($bkFiles);
+    $checks['data_backups'] = [
+        'ok'       => $bkDirExists && $bkCount > 0,
+        'optional' => true,
+        'value'    => $bkDirExists ? ($bkCount . ' backup' . ($bkRecent ? ', ultimo recente' : ', ultimo vecchio')) : null,
+        'hint'     => $bkDirExists ? ($bkCount === 0 ? 'Nessun backup trovato — cron configurato?' : (!$bkRecent ? 'Ultimo backup datato — cron in esecuzione?' : null)) : 'Cartella backup mancante',
+    ];
 
     // ── 6. Actual file-write test ─────────────────────────────────────────────
     $testFile = $dataDir . '/_hc_' . getmypid() . '.tmp';
@@ -174,19 +177,37 @@ if (($_GET['action'] ?? '') === 'health_check') {
 
     // ── 7. Free disk space ────────────────────────────────────────────────────
     $freeBytes = $dataDirOk ? @disk_free_space($dataDir) : false;
-    $freeMB    = $freeBytes !== false ? round($freeBytes / 1048576) : null;
+    $freeMB    = $freeBytes !== false ? round($freeBytes/1048576) : null;
     $checks['disk_space'] = [
-        'ok'       => $freeBytes === false || $freeBytes > 50 * 1048576,
-        'value'    => $freeMB !== null ? $freeMB . ' MB liberi' : null,
+        'ok'       => $freeBytes === false || $freeBytes > 50*1048576,
+        'value'    => $freeMB !== null ? $freeMB.' MB liberi' : null,
         'optional' => true,
+        'hint'     => $freeBytes !== false && $freeBytes <= 50*1048576 ? 'Meno di 50 MB liberi — libera spazio sul disco' : null,
     ];
 
     // ── 8. SQLite database ────────────────────────────────────────────────────
-    $dbPath  = $dataDir . '/dispensa.db';
-    $isFresh = !file_exists($dbPath) && $dataDirOk;
+    // Correct DB name is evershelf.db; detect legacy dispensa.db and suggest migration
+    $dbPath    = $dataDir . '/evershelf.db';
+    $legacyDb  = $dataDir . '/dispensa.db';
+    $hasLegacy = file_exists($legacyDb);
+    $isFresh   = !file_exists($dbPath) && $dataDirOk;
+
+    // Auto-migrate: if evershelf.db missing but dispensa.db exists, rename it
+    if ($isFresh && $hasLegacy && is_writable($legacyDb)) {
+        if (@rename($legacyDb, $dbPath)) {
+            $hasLegacy = false;
+            $isFresh   = false;
+        }
+    }
+
+    // Legacy DB still present alongside evershelf.db → warn
+    $checks['db_legacy'] = [
+        'ok'       => !$hasLegacy,
+        'optional' => true,
+        'hint'     => $hasLegacy ? 'Trovato vecchio dispensa.db — il file è ormai obsoleto, puoi eliminarlo manualmente' : null,
+    ];
 
     if ($isFresh) {
-        // Fresh install: DB will be created automatically on first real API call
         $checks['db_connect']   = ['ok' => true, 'fresh' => true, 'value' => 'nuovo impianto'];
         $checks['db_tables']    = ['ok' => true, 'fresh' => true];
         $checks['db_integrity'] = ['ok' => true, 'fresh' => true];
@@ -202,110 +223,138 @@ if (($_GET['action'] ?? '') === 'health_check') {
             ]);
             $pdo->query('SELECT 1');
             $dbConnOk = true;
-            $checks['db_connect'] = ['ok' => true];
+            $checks['db_connect'] = ['ok' => true, 'value' => basename($dbPath)];
         } catch (\Throwable $e) {
-            $checks['db_connect'] = ['ok' => false, 'error' => $e->getMessage()];
+            $checks['db_connect'] = ['ok' => false, 'error' => $e->getMessage(),
+                'hint' => 'Impossibile aprire il database — verifica permessi su data/evershelf.db'];
         }
 
         if ($dbConnOk && $pdo) {
             // Required tables
-            try {
-                $tables   = $pdo->query("SELECT name FROM sqlite_master WHERE type='table'")->fetchAll(PDO::FETCH_COLUMN);
-                $required = ['inventory', 'products', 'transactions'];
-                $missing  = array_values(array_diff($required, $tables));
-                $checks['db_tables'] = ['ok' => empty($missing), 'missing' => $missing];
-            } catch (\Throwable $e) {
-                $checks['db_tables'] = ['ok' => false, 'error' => $e->getMessage()];
-            }
+            $tables   = $pdo->query("SELECT name FROM sqlite_master WHERE type='table'")->fetchAll(PDO::FETCH_COLUMN);
+            $required = ['inventory', 'products', 'transactions'];
+            $missing  = array_values(array_diff($required, $tables));
+            $checks['db_tables'] = [
+                'ok'   => empty($missing),
+                'missing' => $missing,
+                'hint' => !empty($missing) ? 'Tabelle mancanti: ' . implode(', ', $missing) . ' — esegui una chiamata API per auto-inizializzare il DB' : null,
+            ];
 
-            // Integrity (fast)
-            try {
-                $integ = $pdo->query("PRAGMA quick_check")->fetchColumn();
-                $checks['db_integrity'] = ['ok' => $integ === 'ok', 'value' => $integ !== 'ok' ? $integ : null];
-            } catch (\Throwable $e) {
-                $checks['db_integrity'] = ['ok' => false, 'error' => $e->getMessage()];
-            }
+            // Integrity
+            $integ = $pdo->query("PRAGMA quick_check")->fetchColumn();
+            $checks['db_integrity'] = [
+                'ok'    => $integ === 'ok',
+                'value' => $integ !== 'ok' ? $integ : null,
+                'hint'  => $integ !== 'ok' ? 'Database corrotto: ' . $integ . ' — ripristina da un backup in data/backups/' : null,
+            ];
 
-            // WAL mode
-            try {
-                $wal = $pdo->query("PRAGMA journal_mode")->fetchColumn();
-                $checks['db_wal'] = ['ok' => $wal === 'wal', 'value' => $wal, 'optional' => true];
-            } catch (\Throwable $e) {
-                $checks['db_wal'] = ['ok' => false, 'optional' => true];
-            }
+            // WAL
+            $wal = $pdo->query("PRAGMA journal_mode")->fetchColumn();
+            $checks['db_wal'] = ['ok' => $wal === 'wal', 'value' => $wal, 'optional' => true,
+                'hint' => $wal !== 'wal' ? 'Modalità journal non ottimale — sarà corretta automaticamente al primo avvio' : null];
 
-            // DB file size
-            $dbSizeKB = round(filesize($dbPath) / 1024);
-            $checks['db_size'] = ['ok' => true, 'value' => $dbSizeKB . ' KB', 'optional' => true];
-
-            // Row count
-            try {
-                $cnt = $pdo->query("SELECT COUNT(*) FROM inventory WHERE quantity > 0")->fetchColumn();
-                $checks['db_row_count'] = ['ok' => true, 'value' => $cnt . ' prodotti in inventario', 'optional' => true];
-            } catch (\Throwable $e) {
-                $checks['db_row_count'] = ['ok' => true, 'value' => '?', 'optional' => true];
-            }
+            // Size & rows
+            $checks['db_size']      = ['ok' => true, 'value' => round(filesize($dbPath)/1024).' KB', 'optional' => true];
+            $cnt = $pdo->query("SELECT COUNT(*) FROM inventory WHERE quantity > 0")->fetchColumn();
+            $checks['db_row_count'] = ['ok' => true, 'value' => $cnt.' prodotti in inventario', 'optional' => true];
         } else {
-            foreach (['db_tables', 'db_integrity'] as $k) $checks[$k] = ['ok' => false];
-            foreach (['db_wal', 'db_size', 'db_row_count'] as $k) $checks[$k] = ['ok' => false, 'optional' => true];
+            foreach (['db_tables', 'db_integrity'] as $k)
+                $checks[$k] = ['ok' => false, 'hint' => 'Impossibile verificare — connessione DB fallita'];
+            foreach (['db_wal', 'db_size', 'db_row_count'] as $k)
+                $checks[$k] = ['ok' => false, 'optional' => true];
         }
     }
 
     // ── 9. .env file ──────────────────────────────────────────────────────────
-    $checks['env_file'] = ['ok' => file_exists(__DIR__ . '/../.env'), 'optional' => true];
-
-    // ── 10. Gemini AI key ─────────────────────────────────────────────────────
-    $checks['gemini_key'] = ['ok' => !empty(env('GEMINI_API_KEY')), 'optional' => true];
-
-    // ── 11. Bring! credentials & token ────────────────────────────────────────
-    $checks['bring_credentials'] = [
-        'ok'       => !empty(env('BRING_EMAIL')) && !empty(env('BRING_PASSWORD')),
+    $envExists = file_exists(__DIR__ . '/../.env');
+    $checks['env_file'] = [
+        'ok'       => $envExists,
         'optional' => true,
+        'hint'     => !$envExists ? 'File .env mancante — copia .env.example in .env e configura i valori' : null,
     ];
-    $checks['bring_token'] = ['ok' => !empty(env('BRING_ACCESS_TOKEN')), 'optional' => true];
 
-    // ── 12. cURL SSL support ──────────────────────────────────────────────────
+    // ── 10. Gemini AI — solo se GEMINI_API_KEY è impostata ───────────────────
+    $geminiKey = $envGet('GEMINI_API_KEY');
+    if (!empty($geminiKey)) {
+        $checks['gemini_key'] = ['ok' => strlen($geminiKey) > 20, 'optional' => true,
+            'hint' => strlen($geminiKey) <= 20 ? 'Chiave Gemini AI sembra troppo corta — verifica il valore in .env' : null];
+    } else {
+        $checks['gemini_key'] = ['ok' => false, 'optional' => true,
+            'hint' => 'GEMINI_API_KEY non configurata — le funzioni AI non saranno disponibili'];
+    }
+
+    // ── 11. Bring! — solo se EMAIL+PASSWORD sono impostate ───────────────────
+    $bringEmail    = $envGet('BRING_EMAIL');
+    $bringPassword = $envGet('BRING_PASSWORD');
+    $bringEnabled  = !empty($bringEmail) && !empty($bringPassword);
+    if ($bringEnabled) {
+        $checks['bring_credentials'] = ['ok' => true, 'optional' => true];
+        // Token: stored in data/bring_token.json (not in .env)
+        $bringTokenFile = $dataDir . '/bring_token.json';
+        $bringTokenOk   = false;
+        $bringTokenHint = null;
+        if (file_exists($bringTokenFile)) {
+            $bringData    = @json_decode(@file_get_contents($bringTokenFile), true);
+            $bringTokenOk = !empty($bringData['access_token'] ?? ($bringData['accessToken'] ?? ''));
+            if (!$bringTokenOk) $bringTokenHint = 'Token Bring! presente ma non valido — verrà rinnovato automaticamente al prossimo accesso';
+        } else {
+            $bringTokenHint = 'Token Bring! non ancora generato — verrà creato al primo accesso alla lista spesa';
+        }
+        $checks['bring_token'] = ['ok' => $bringTokenOk, 'optional' => true, 'hint' => $bringTokenHint];
+    }
+    // If Bring! not configured, skip entirely (no check at all)
+
+    // ── 12. TTS — solo se TTS_ENABLED ────────────────────────────────────────
+    if ($envGet('TTS_ENABLED') === 'true') {
+        $ttsUrl = $envGet('TTS_URL');
+        $checks['tts_url'] = [
+            'ok'       => !empty($ttsUrl),
+            'optional' => true,
+            'hint'     => empty($ttsUrl) ? 'TTS_ENABLED=true ma TTS_URL non configurata' : null,
+        ];
+    }
+
+    // ── 13. Scale gateway — solo se SCALE_ENABLED ────────────────────────────
+    if ($envGet('SCALE_ENABLED') === 'true') {
+        $scaleUrl = $envGet('SCALE_GATEWAY_URL');
+        $checks['scale_gateway'] = [
+            'ok'       => !empty($scaleUrl),
+            'optional' => true,
+            'hint'     => empty($scaleUrl) ? 'SCALE_ENABLED=true ma SCALE_GATEWAY_URL non configurata' : null,
+        ];
+    }
+
+    // ── 14. cURL SSL ──────────────────────────────────────────────────────────
     if (function_exists('curl_version')) {
         $cv = curl_version();
-        $checks['curl_ssl'] = [
-            'ok'       => !empty($cv['ssl_version']),
-            'value'    => $cv['ssl_version'] ?? null,
-            'optional' => true,
-        ];
+        $checks['curl_ssl'] = ['ok' => !empty($cv['ssl_version']), 'value' => $cv['ssl_version'] ?? null, 'optional' => true,
+            'hint' => empty($cv['ssl_version']) ? 'cURL senza supporto SSL — le chiamate HTTPS potrebbero fallire' : null];
     } else {
-        $checks['curl_ssl'] = ['ok' => false, 'optional' => true];
+        $checks['curl_ssl'] = ['ok' => false, 'optional' => true, 'hint' => 'cURL non disponibile'];
     }
 
-    // ── 13. Internet / Gemini API reachability ────────────────────────────────
-    $internetOk = false;
-    if (extension_loaded('curl')) {
+    // ── 15. Internet — raggiungibilità API Gemini (solo se Gemini configurato) ─
+    if (!empty($geminiKey) && extension_loaded('curl')) {
         $ch = curl_init();
-        curl_setopt_array($ch, [
-            CURLOPT_URL            => 'https://generativelanguage.googleapis.com/',
-            CURLOPT_NOBODY         => true,
-            CURLOPT_FOLLOWLOCATION => false,
-            CURLOPT_TIMEOUT        => 3,
-            CURLOPT_CONNECTTIMEOUT => 2,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_SSL_VERIFYPEER => false,
-        ]);
+        curl_setopt_array($ch, [CURLOPT_URL => 'https://generativelanguage.googleapis.com/', CURLOPT_NOBODY => true,
+            CURLOPT_FOLLOWLOCATION => false, CURLOPT_TIMEOUT => 4, CURLOPT_CONNECTTIMEOUT => 3,
+            CURLOPT_RETURNTRANSFER => true, CURLOPT_SSL_VERIFYPEER => false]);
         curl_exec($ch);
         $httpCode   = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $curlErr    = curl_errno($ch);
+        $curlErrNo  = curl_errno($ch);
         curl_close($ch);
-        $internetOk = ($httpCode > 0) || ($curlErr === 0);
+        $internetOk = $httpCode > 0 || $curlErrNo === 0;
+        $checks['internet'] = ['ok' => $internetOk, 'optional' => true,
+            'hint' => !$internetOk ? 'Impossibile raggiungere i server Gemini — le funzioni AI non funzioneranno senza connessione internet' : null];
     }
-    $checks['internet'] = ['ok' => $internetOk, 'optional' => true];
 
     // ── Compute overall result ────────────────────────────────────────────────
-    $criticalKeys = [
-        'php_version', 'ext_pdo_sqlite', 'ext_curl', 'ext_json', 'ext_mbstring',
-        'data_dir', 'data_write_test', 'db_connect', 'db_tables', 'db_integrity',
-    ];
+    $criticalKeys = ['php_version', 'ext_pdo_sqlite', 'ext_curl', 'ext_json', 'ext_mbstring',
+                     'data_dir', 'data_write_test', 'db_connect', 'db_tables', 'db_integrity'];
     $allOk = array_reduce($criticalKeys, fn($c, $k) => $c && ($checks[$k]['ok'] ?? false), true);
 
     header('Content-Type: application/json');
-    echo json_encode(['ok' => $allOk, 'checks' => $checks, 'fresh' => $isFresh ?? false], JSON_UNESCAPED_UNICODE);
+    echo json_encode(['ok' => $allOk, 'checks' => $checks, 'fresh' => $isFresh], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
