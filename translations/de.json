@@ -1212,6 +1212,7 @@
     "check_backups": "Backup-Verzeichnis",
     "check_write_test": "Schreibtest",
     "check_disk_space": "Speicherplatz",
+    "check_db_legacy": "Legacy-DB (dispensa.db)",
     "check_db_connect": "Datenbankverbindung",
     "check_db_tables": "Datenbanktabellen",
     "check_db_integrity": "Datenbankintegrität",
@@ -1222,6 +1223,8 @@
     "check_gemini": "Gemini-AI-Schlüssel",
     "check_bring_creds": "Bring!-Anmeldedaten",
     "check_bring_token": "Bring!-Token",
+    "check_tts": "Text-to-Speech-URL",
+    "check_scale": "Waagen-Gateway",
     "check_curl_ssl": "cURL-SSL",
     "check_internet": "Internetverbindung",
     "fresh_install": "Neuinstallation",
@@ -1229,7 +1232,9 @@
     "all_ok": "System OK",
     "critical_error_short": "Kritischer Fehler",
     "critical_error": "Kritischer Fehler: Die App kann nicht gestartet werden. Prüfe die Serverlogs.",
-    "error_network": "Server nicht erreichbar. Bitte Netzwerkverbindung prüfen.",
+    "critical_error_intro": "Die App kann aufgrund folgender Probleme nicht gestartet werden:",
+    "error_network": "Server nicht erreichbar.",
+    "error_network_detail": "Der Browser kann den PHP-Server nicht erreichen.\n\nMögliche Ursachen:\n• Apache/PHP-Server läuft nicht\n• Netzwerk- oder Firewall-Problem\n• Falsche App-URL\n\nBitte Server starten und erneut versuchen.",
     "retry": "Erneut versuchen"
   }
 }

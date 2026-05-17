@@ -14924,52 +14924,56 @@ async function _runStartupCheck() {
         result = await resp.json();
     } catch(e) {
         clearInterval(slowAnim);
-        setProgress(100, tl('error_network', 'Impossibile contattare il server'), 'error');
-        errorEl.textContent = tl('error_network', 'Impossibile contattare il server. Controlla la connessione di rete.');
-        errorEl.style.display = '';
-        retryBtn.style.display = '';
+        _showStartupErrorPopup(
+            tl('error_network', 'Impossibile contattare il server'),
+            tl('error_network_detail', 'Il browser non riesce a raggiungere il server PHP.\n\nPossibili cause:\n• Il server Apache/PHP non è in esecuzione\n• Problema di rete o firewall\n• URL dell\'app non corretta\n\nControlla che il server sia avviato e riprova.'),
+            errorEl, retryBtn
+        );
+        setProgress(100, `❌ ${tl('error_network', 'Server non raggiungibile')}`, 'error');
         return false;
     }
     clearInterval(slowAnim);
     _fetchDone = true;
 
     // ── Ordered check definitions (must match PHP keys) ───────────────────────
-    //   { key, label, critical }
     const CHECKS = [
         // PHP runtime
-        { key: 'php_version',       label: 'PHP',                            critical: true  },
-        { key: 'ext_pdo_sqlite',    label: 'PDO SQLite',                     critical: true  },
-        { key: 'ext_curl',          label: 'cURL',                           critical: true  },
-        { key: 'ext_json',          label: 'JSON',                           critical: true  },
-        { key: 'ext_mbstring',      label: 'mbstring',                       critical: true  },
-        { key: 'ext_openssl',       label: 'OpenSSL',                        critical: false },
-        { key: 'ext_fileinfo',      label: 'Fileinfo',                       critical: false },
-        { key: 'ext_zip',           label: 'ZIP',                            critical: false },
-        { key: 'ext_intl',          label: 'Intl',                           critical: false },
-        { key: 'php_memory',        label: tl('check_php_memory',  'Memoria PHP'),    critical: false },
-        { key: 'php_max_exec',      label: tl('check_php_timeout', 'Timeout PHP'),    critical: false },
-        { key: 'php_upload',        label: tl('check_php_upload',  'Upload PHP'),     critical: false },
+        { key: 'php_version',       label: 'PHP',                                           critical: true  },
+        { key: 'ext_pdo_sqlite',    label: 'PDO SQLite',                                    critical: true  },
+        { key: 'ext_curl',          label: 'cURL',                                          critical: true  },
+        { key: 'ext_json',          label: 'JSON',                                          critical: true  },
+        { key: 'ext_mbstring',      label: 'mbstring',                                      critical: true  },
+        { key: 'ext_openssl',       label: 'OpenSSL',                                       critical: false },
+        { key: 'ext_fileinfo',      label: 'Fileinfo',                                      critical: false },
+        { key: 'ext_zip',           label: 'ZIP',                                           critical: false },
+        { key: 'ext_intl',          label: 'Intl',                                          critical: false },
+        { key: 'php_memory',        label: tl('check_php_memory',  'Memoria PHP'),          critical: false },
+        { key: 'php_max_exec',      label: tl('check_php_timeout', 'Timeout PHP'),          critical: false },
+        { key: 'php_upload',        label: tl('check_php_upload',  'Upload PHP'),           critical: false },
         // Filesystem
-        { key: 'data_dir',          label: tl('check_data_dir',    'Cartella dati'),  critical: true  },
-        { key: 'data_rate_limits',  label: tl('check_rate_limits', 'Rate limits dir'),critical: false },
-        { key: 'data_backups',      label: tl('check_backups',     'Backup dir'),     critical: false },
-        { key: 'data_write_test',   label: tl('check_write_test',  'Test scrittura'), critical: true  },
-        { key: 'disk_space',        label: tl('check_disk_space',  'Spazio disco'),   critical: false },
+        { key: 'data_dir',          label: tl('check_data_dir',    'Cartella dati'),        critical: true  },
+        { key: 'data_rate_limits',  label: tl('check_rate_limits', 'Rate limits dir'),      critical: false },
+        { key: 'data_backups',      label: tl('check_backups',     'Backup dir'),           critical: false },
+        { key: 'data_write_test',   label: tl('check_write_test',  'Test scrittura'),       critical: true  },
+        { key: 'disk_space',        label: tl('check_disk_space',  'Spazio disco'),         critical: false },
         // Database
-        { key: 'db_connect',        label: tl('check_db_connect',  'Connessione DB'), critical: true  },
-        { key: 'db_tables',         label: tl('check_db_tables',   'Tabelle DB'),     critical: true  },
-        { key: 'db_integrity',      label: tl('check_db_integrity','Integrità DB'),   critical: true  },
-        { key: 'db_wal',            label: tl('check_db_wal',      'WAL mode'),       critical: false },
-        { key: 'db_size',           label: tl('check_db_size',     'Dimensione DB'),  critical: false },
-        { key: 'db_row_count',      label: tl('check_db_rows',     'Dati inventario'),critical: false },
-        // Config
-        { key: 'env_file',          label: tl('check_env',         'File .env'),      critical: false },
-        { key: 'gemini_key',        label: tl('check_gemini',      'Gemini AI key'),  critical: false },
-        { key: 'bring_credentials', label: tl('check_bring_creds', 'Bring! credenziali'), critical: false },
-        { key: 'bring_token',       label: tl('check_bring_token', 'Bring! token'),   critical: false },
+        { key: 'db_legacy',         label: tl('check_db_legacy',   'DB legacy'),            critical: false },
+        { key: 'db_connect',        label: tl('check_db_connect',  'Connessione DB'),       critical: true  },
+        { key: 'db_tables',         label: tl('check_db_tables',   'Tabelle DB'),           critical: true  },
+        { key: 'db_integrity',      label: tl('check_db_integrity','Integrità DB'),         critical: true  },
+        { key: 'db_wal',            label: tl('check_db_wal',      'WAL mode'),             critical: false },
+        { key: 'db_size',           label: tl('check_db_size',     'Dimensione DB'),        critical: false },
+        { key: 'db_row_count',      label: tl('check_db_rows',     'Dati inventario'),      critical: false },
+        // Config & optional features
+        { key: 'env_file',          label: tl('check_env',         'File .env'),            critical: false },
+        { key: 'gemini_key',        label: tl('check_gemini',      'Gemini AI key'),        critical: false },
+        { key: 'bring_credentials', label: tl('check_bring_creds', 'Bring! credenziali'),   critical: false },
+        { key: 'bring_token',       label: tl('check_bring_token', 'Bring! token'),         critical: false },
+        { key: 'tts_url',           label: tl('check_tts',         'TTS URL'),              critical: false },
+        { key: 'scale_gateway',     label: tl('check_scale',       'Scale gateway'),        critical: false },
         // Network
-        { key: 'curl_ssl',          label: tl('check_curl_ssl',    'cURL SSL'),       critical: false },
-        { key: 'internet',          label: tl('check_internet',    'Internet'),        critical: false },
+        { key: 'curl_ssl',          label: tl('check_curl_ssl',    'cURL SSL'),             critical: false },
+        { key: 'internet',          label: tl('check_internet',    'Internet'),             critical: false },
     ];
 
     const checks   = result.checks || {};
@@ -14978,10 +14982,10 @@ async function _runStartupCheck() {
     const total    = CHECKS.filter(d => checks[d.key] !== undefined).length;
     let   done     = 0;
 
-    // Phase 2: step through each check with real-time label
+    // Phase 2: step through each check with animated label
     for (const def of CHECKS) {
         const c = checks[def.key];
-        if (c === undefined) continue; // not returned by server
+        if (c === undefined) continue; // not returned by server (feature not enabled)
 
         done++;
         const pct    = 15 + Math.round((done / total) * 83); // 15→98%
@@ -14989,10 +14993,10 @@ async function _runStartupCheck() {
         const isOpt  = c.optional === true || !def.critical;
         const isFresh = c.fresh === true;
 
-        // Build label: "check name (extra value)"
+        // Build label with value
         let lbl = def.label;
-        if (c.value) lbl += ` (${c.value})`;
-        if (isFresh) lbl += ` — ${tl('fresh_install', 'nuovo impianto')}`;
+        if (c.value)            lbl += ` (${c.value})`;
+        if (isFresh)            lbl += ` — ${tl('fresh_install', 'nuovo impianto')}`;
         if (!isOk && c.error)   lbl += ` — ${c.error}`;
         if (!isOk && c.missing?.length) lbl += ` — mancanti: ${c.missing.join(', ')}`;
 
@@ -15003,35 +15007,98 @@ async function _runStartupCheck() {
             (isOpt ? warnings : errors).push({ def, c });
         }
 
-        await new Promise(r => setTimeout(r, 45)); // ~45ms per step → ~1.3s total
+        await new Promise(r => setTimeout(r, 40));
     }
 
-    // ── Completed ─────────────────────────────────────────────────────────────
+    // ── Errors → red bar + blocking popup ────────────────────────────────────
     if (errors.length > 0) {
         setProgress(100, `❌ ${tl('critical_error_short', 'Errore critico')}`, 'error');
-        const errDetail = errors.map(e => e.def.label + (e.c.error ? `: ${e.c.error}` : '')).join('\n');
-        errorEl.textContent = `${tl('critical_error', 'Errore critico: l\'app non può avviarsi.')}${errDetail ? '\n' + errDetail : ''}`;
-        errorEl.style.display = '';
-        retryBtn.style.display = '';
+        await new Promise(r => setTimeout(r, 300));
+        const errLines = errors.map(e => {
+            const hint = e.c.hint || (e.c.error ? e.c.error : null);
+            return `❌ ${e.def.label}${hint ? '\n   → ' + hint : ''}`;
+        }).join('\n\n');
+        _showStartupErrorPopup(
+            tl('critical_error_short', 'Errore critico'),
+            tl('critical_error_intro', 'L\'app non può avviarsi a causa dei seguenti problemi:') + '\n\n' + errLines,
+            errorEl, retryBtn
+        );
         return false;
     }
 
-    // Warnings only
+    // ── Warnings → amber bar + warning popup auto-close 5s ───────────────────
     if (warnings.length > 0) {
-        setProgress(100, `⚠️ ${warnings.length} ${tl('warnings_found', 'avvisi rilevati')}`, 'warn');
-        warningsEl.innerHTML = warnings
-            .map(w => `<span class="preloader-warn-badge">⚠️ ${w.def.label}</span>`)
-            .join('');
-        warningsEl.style.display = '';
-        await new Promise(r => setTimeout(r, 2200)); // show warnings for 2.2s
+        setProgress(100, `⚠️ ${warnings.length} ${tl('warnings_found', 'avvisi')}`, 'warn');
+        await new Promise(r => setTimeout(r, 200));
+
+        // Build warning popup (auto-close 5s)
+        _showStartupWarningPopup(warnings, warningsEl, tl);
+
+        // Wait for user to read (5s) then proceed
+        await new Promise(r => setTimeout(r, 5200));
+
+        // Hide warning popup
         warningsEl.style.display = 'none';
     } else {
         setProgress(100, `✅ ${tl('all_ok', 'Sistema OK')}`);
-        await new Promise(r => setTimeout(r, 700));
+        await new Promise(r => setTimeout(r, 600));
     }
 
     wrapEl.style.display = 'none';
     return true;
+}
+
+/** Builds and shows the warning popup with countdown (auto-closes after 5s). */
+function _showStartupWarningPopup(warnings, container, tl) {
+    const lines = warnings.map(w => {
+        const hint = w.c.hint || null;
+        return `<div class="startup-warn-item">
+            <span class="startup-warn-icon">⚠️</span>
+            <div class="startup-warn-body">
+                <strong>${w.def.label}</strong>
+                ${hint ? `<p>${hint}</p>` : ''}
+            </div>
+        </div>`;
+    }).join('');
+
+    container.innerHTML = `
+        <div class="startup-popup startup-popup-warn">
+            <div class="startup-popup-header">
+                <span>⚠️ ${warnings.length} ${tl('warnings_found', 'avviso/i rilevato/i')}</span>
+                <span class="startup-popup-countdown" id="startup-countdown">5</span>
+            </div>
+            <div class="startup-popup-body">${lines}</div>
+            <div class="startup-popup-bar-wrap"><div class="startup-popup-bar" id="startup-popup-bar"></div></div>
+        </div>`;
+    container.style.display = '';
+
+    // Animate countdown bar
+    const barEl = document.getElementById('startup-popup-bar');
+    const cntEl = document.getElementById('startup-countdown');
+    if (barEl) {
+        barEl.style.transition = 'none';
+        barEl.style.width = '100%';
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                barEl.style.transition = 'width 5s linear';
+                barEl.style.width = '0%';
+            });
+        });
+    }
+    let secs = 4;
+    const t = setInterval(() => {
+        if (cntEl) cntEl.textContent = secs;
+        secs--;
+        if (secs < 0) clearInterval(t);
+    }, 1000);
+}
+
+/** Shows a blocking error in the preloader (no auto-close). */
+function _showStartupErrorPopup(title, detail, errorEl, retryBtn) {
+    if (!errorEl) return;
+    errorEl.innerHTML = `<strong>${title}</strong>\n${detail}`;
+    errorEl.style.display = '';
+    if (retryBtn) retryBtn.style.display = '';
 }
 
 /** Retry button handler in the startup error screen. */

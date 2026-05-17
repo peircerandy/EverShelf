@@ -1212,6 +1212,7 @@
     "check_backups": "Backup dir",
     "check_write_test": "Disk write test",
     "check_disk_space": "Disk space",
+    "check_db_legacy": "Legacy DB (dispensa.db)",
     "check_db_connect": "Database connection",
     "check_db_tables": "Database tables",
     "check_db_integrity": "Database integrity",
@@ -1222,6 +1223,8 @@
     "check_gemini": "Gemini AI key",
     "check_bring_creds": "Bring! credentials",
     "check_bring_token": "Bring! token",
+    "check_tts": "Text-to-Speech URL",
+    "check_scale": "Scale gateway",
     "check_curl_ssl": "cURL SSL",
     "check_internet": "Internet connection",
     "fresh_install": "fresh install",
@@ -1229,7 +1232,9 @@
     "all_ok": "System OK",
     "critical_error_short": "Critical error",
     "critical_error": "Critical error: the app cannot start. Check your server logs.",
-    "error_network": "Cannot reach the server. Check your network connection.",
+    "critical_error_intro": "The app cannot start due to the following issues:",
+    "error_network": "Cannot reach the server.",
+    "error_network_detail": "The browser cannot reach the PHP server.\n\nPossible causes:\n• Apache/PHP server is not running\n• Network or firewall issue\n• Incorrect app URL\n\nMake sure the server is started and try again.",
     "retry": "Retry"
   }
 }
