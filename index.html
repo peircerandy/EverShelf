@@ -905,23 +905,6 @@
                             </select>
                         </div>
                         <div class="form-group">
-                            <label data-i18n="settings.price.currency_label">💱 Valuta</label>
-                            <select id="setting-price-currency" class="form-input">
-                                <option value="EUR">€ Euro (EUR)</option>
-                                <option value="USD">$ Dollaro USA (USD)</option>
-                                <option value="GBP">£ Sterlina (GBP)</option>
-                                <option value="CHF">CHF Franco Svizzero</option>
-                                <option value="CAD">CA$ Dollaro Canadese</option>
-                                <option value="AUD">A$ Dollaro Australiano</option>
-                                <option value="BRL">R$ Real Brasiliano</option>
-                                <option value="JPY">¥ Yen Giapponese</option>
-                                <option value="SEK">kr Corona Svedese</option>
-                                <option value="NOK">kr Corona Norvegese</option>
-                                <option value="DKK">kr Corona Danese</option>
-                                <option value="PLN">zł Zloty Polacco</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
                             <label data-i18n="settings.price.update_label">🔄 Aggiorna prezzi ogni</label>
                             <div class="qty-control">
                                 <button type="button" class="qty-btn" onclick="adjustQty('setting-price-update-months', -1, 1, 24)">−</button>
@@ -1339,6 +1322,30 @@
 
             <!-- Info Tab -->
             <div class="settings-panel" id="tab-info">
+                <!-- Currency card -->
+                <div class="settings-card">
+                    <h4 data-i18n="settings.info.currency_title">💱 Valuta</h4>
+                    <p class="settings-hint" data-i18n="settings.info.currency_hint">La valuta usata per tutti i costi e i prezzi nell'app.</p>
+                    <div class="form-group" style="margin-top:8px">
+                        <select id="setting-price-currency" class="form-input">
+                            <option value="EUR">€ Euro (EUR)</option>
+                            <option value="USD">$ Dollaro USA (USD)</option>
+                            <option value="GBP">£ Sterlina (GBP)</option>
+                            <option value="CHF">CHF Franco Svizzero</option>
+                            <option value="CAD">CA$ Dollaro Canadese</option>
+                            <option value="AUD">A$ Dollaro Australiano</option>
+                            <option value="BRL">R$ Real Brasiliano</option>
+                            <option value="JPY">¥ Yen Giapponese</option>
+                            <option value="SEK">kr Corona Svedese</option>
+                            <option value="NOK">kr Corona Norvegese</option>
+                            <option value="DKK">kr Corona Danese</option>
+                            <option value="PLN">zł Zloty Polacco</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="margin-top:10px">
+                        <button class="btn btn-primary" onclick="saveSettings()" data-i18n="btn.save">Salva</button>
+                    </div>
+                </div>
                 <!-- Gemini AI Usage card -->
                 <div class="settings-card">
                     <h4 data-i18n="settings.info.ai_title">Gemini AI — Token Usage</h4>

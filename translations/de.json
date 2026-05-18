@@ -780,10 +780,6 @@
       "log_size": "Protokolle",
       "log_level": "Log-Level",
       "ai_overview": "KI-Nutzungsübersicht, Inventar und Systemstatus",
-      "tracked_section": "Erfasst (seit Monitoring-Start)",
-      "retro_section": "Rückwirkende Schätzung — {month}",
-      "retro_note": "Schätzung basiert auf KI-Cache-Dateien, die vor der Monitoring-Aktivierung generiert wurden.",
-      "year_section": "Jahr {year} — Gesamtschätzung",
       "calls_unit": "Aufrufe",
       "inv_title": "Inventar",
       "inv_active": "Aktiv",
@@ -801,7 +797,10 @@
       "cache_entries": "Produkte",
       "last_backup": "Letztes Backup",
       "bring_days": "Token läuft in {n} Tagen ab",
-      "bring_expired": "Token abgelaufen"
+      "bring_expired": "Token abgelaufen",
+      "year_label": "Jahr {year}",
+      "currency_title": "Währung",
+      "currency_hint": "Die Währung, die für alle Kosten und Preise in der App verwendet wird."
     }
   },
   "expiry": {

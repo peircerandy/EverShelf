@@ -780,10 +780,6 @@
       "log_size": "Log",
       "log_level": "Livello log",
       "ai_overview": "Prospetto utilizzo AI, inventario e stato del sistema",
-      "tracked_section": "Tracciato (da inizio monitoraggio)",
-      "retro_section": "Stima retroattiva — {month}",
-      "retro_note": "Stima basata sulle voci presenti nei file di cache AI, generati prima dell'attivazione del monitoraggio.",
-      "year_section": "Anno {year} — totale stimato",
       "calls_unit": "call",
       "inv_title": "Inventario",
       "inv_active": "Attivi",
@@ -801,7 +797,10 @@
       "cache_entries": "prodotti",
       "last_backup": "Ultimo backup",
       "bring_days": "token scade tra {n} giorni",
-      "bring_expired": "token scaduto"
+      "bring_expired": "token scaduto",
+      "year_label": "Anno {year}",
+      "currency_title": "Valuta",
+      "currency_hint": "La valuta usata per tutti i costi e i prezzi nell'app."
     }
   },
   "expiry": {
