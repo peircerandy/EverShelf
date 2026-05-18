@@ -2233,16 +2233,27 @@ async function _renderInfoTab() {
         const monthLabel = new Intl.DateTimeFormat(locale, {month:'long', year:'numeric'})
             .format(new Date(parseInt(yr), parseInt(mo)-1, 1));
 
-        // Cost → display currency
+        // Cost → user currency
         const toCurr = (usd) => {
             if (!usd) return '—';
-            const c = s.price_currency;
-            const v = c === 'EUR' ? usd * 0.92 : c === 'GBP' ? usd * 0.79 : usd;
-            const sym = c === 'EUR' ? '€' : c === 'GBP' ? '£' : '$';
-            return sym + v.toFixed(4);
+            const c = s.price_currency || 'EUR';
+            let v = usd, sym = '$';
+            if      (c === 'EUR') { v = usd * 0.92; sym = '€'; }
+            else if (c === 'GBP') { v = usd * 0.79; sym = '£'; }
+            else if (c === 'CHF') { v = usd * 0.90; sym = 'CHF '; }
+            else if (c === 'CAD') { v = usd * 1.36; sym = 'CA$'; }
+            else if (c === 'AUD') { v = usd * 1.54; sym = 'A$'; }
+            else if (c === 'BRL') { v = usd * 5.20; sym = 'R$'; }
+            else if (c === 'JPY') { v = usd * 155;  sym = '¥'; }
+            else if (c === 'SEK') { v = usd * 10.4; sym = 'kr'; }
+            else if (c === 'NOK') { v = usd * 10.6; sym = 'kr'; }
+            else if (c === 'DKK') { v = usd * 6.85; sym = 'kr'; }
+            else if (c === 'PLN') { v = usd * 3.98; sym = 'zł'; }
+            const decimals = (c === 'JPY') ? 1 : 4;
+            return sym + v.toFixed(decimals);
         };
-        const fmtTok = n => n >= 1_000_000 ? (n/1_000_000).toFixed(2)+'M'
-                          : n >= 1_000 ? Math.round(n/1_000)+'K' : String(n||0);
+        const fmtTok   = n => n >= 1_000_000 ? (n/1_000_000).toFixed(2)+'M'
+                            : n >= 1_000 ? Math.round(n/1_000)+'K' : String(n||0);
         const fmtBytes = b => b > 1048576 ? (b/1048576).toFixed(1)+' MB'
                             : b > 1024 ? Math.round(b/1024)+' KB' : (b||0)+' B';
         const fmtDate  = ts => ts ? new Intl.DateTimeFormat(locale, {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'}).format(new Date(ts*1000)) : '—';
@@ -2251,71 +2262,53 @@ async function _renderInfoTab() {
                 <div style="font-size:1.1rem;font-weight:700;color:${color||'var(--text-primary,#1e293b)'}">${val}</div>
                 <div style="font-size:0.7rem;color:var(--text-secondary,#64748b);margin-top:2px">${label}</div>
             </div>`;
+        const sectionHeader = (label) =>
+            `<div style="font-size:0.78rem;font-weight:600;color:var(--text-secondary);margin-bottom:8px;text-transform:uppercase;letter-spacing:.04em">${label}</div>`;
 
         // ── AI Usage card ────────────────────────────────────────────────────
         if (aiEl) {
-            const tr   = d.tracked || {};
-            const retro = d.retro;
-            const yr_t = d.year_tracked || {};
+            const ms = d.month_stats || {};
+            const ys = d.year_stats  || {};
 
-            // Update card subtitle dynamically
             const hintEl = aiEl.closest('.settings-card')?.querySelector('.info-ai-subtitle');
-            if (hintEl) hintEl.textContent = t('settings.info.ai_overview').replace('{month}', monthLabel);
+            if (hintEl) hintEl.textContent = t('settings.info.ai_overview');
 
-            // Tracked section
-            let trackedHtml = '';
-            if (tr.calls > 0) {
-                const actionRows = Object.entries(tr.by_action || {})
-                    .sort((a,b) => b[1]-a[1]).slice(0, 8)
-                    .map(([k,v]) => `<tr><td style="padding:3px 12px 3px 0;color:var(--text-secondary);font-size:0.82rem">${k}</td><td style="font-variant-numeric:tabular-nums;font-size:0.82rem"><strong>${v}</strong> ${t('settings.info.calls_unit')}</td></tr>`).join('');
-                const modelRows = Object.entries(tr.by_model || {})
-                    .map(([m,mv]) => `<tr><td style="padding:3px 12px 3px 0;color:var(--text-secondary);font-size:0.82rem">${m}</td><td style="font-variant-numeric:tabular-nums;font-size:0.82rem"><strong>${fmtTok((mv.in||0)+(mv.out||0))}</strong></td></tr>`).join('');
-                trackedHtml = `
-                    <div style="margin-bottom:12px">
-                        <div style="font-size:0.78rem;font-weight:600;color:var(--text-secondary);margin-bottom:8px;text-transform:uppercase;letter-spacing:.04em">${t('settings.info.tracked_section')}</div>
-                        <div style="display:flex;gap:8px;flex-wrap:wrap">
-                            ${pill(tr.calls, t('settings.info.ai_calls'))}
-                            ${pill(fmtTok((tr.input_tokens||0)+(tr.output_tokens||0)), t('settings.info.total_tokens'))}
-                            ${pill(toCurr(tr.cost_usd), t('settings.info.est_cost'), '#15803d')}
-                        </div>
-                        ${actionRows ? `<details style="margin-top:8px"><summary style="font-size:0.82rem;cursor:pointer;color:var(--text-secondary)">${t('settings.info.by_action')}</summary><table style="margin-top:6px;border-collapse:collapse">${actionRows}</table></details>` : ''}
-                        ${modelRows  ? `<details style="margin-top:4px"><summary style="font-size:0.82rem;cursor:pointer;color:var(--text-secondary)">${t('settings.info.by_model')}</summary><table style="margin-top:6px;border-collapse:collapse">${modelRows}</table></details>` : ''}
-                    </div>`;
-            }
+            const msIn  = ms.input_tokens  || 0;
+            const msOut = ms.output_tokens || 0;
+            const ysIn  = ys.input_tokens  || 0;
+            const ysOut = ys.output_tokens || 0;
 
-            // Retroactive estimate section
-            let retroHtml = '';
-            if (retro && retro.calls_month > 0) {
-                retroHtml = `
-                    <div style="background:var(--bg-secondary);border-radius:10px;padding:12px;margin-bottom:12px;border-left:3px solid #f59e0b">
-                        <div style="font-size:0.78rem;font-weight:600;color:#92400e;margin-bottom:8px;text-transform:uppercase;letter-spacing:.04em">
-                            ${t('settings.info.retro_section').replace('{month}', monthLabel)}
-                        </div>
-                        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
-                            ${pill('~'+retro.calls_month, t('settings.info.ai_calls'))}
-                            ${pill('~'+fmtTok((retro.tok_in_month||0)+(retro.tok_out_month||0)), t('settings.info.total_tokens'))}
-                            ${pill('~'+toCurr(retro.cost_month), t('settings.info.est_cost'), '#92400e')}
-                        </div>
-                        <p style="font-size:0.75rem;color:#92400e;margin:0">${t('settings.info.retro_note')}</p>
-                    </div>`;
-            }
+            // Month section
+            const actionRows = Object.entries(ms.by_action || {})
+                .sort((a,b) => b[1]-a[1]).slice(0, 8)
+                .map(([k,v]) => `<tr><td style="padding:3px 12px 3px 0;color:var(--text-secondary);font-size:0.82rem">${k}</td><td style="font-variant-numeric:tabular-nums;font-size:0.82rem"><strong>${v}</strong> ${t('settings.info.calls_unit')}</td></tr>`).join('');
+            const modelRows  = Object.entries(ms.by_model  || {})
+                .map(([m,mv]) => `<tr><td style="padding:3px 12px 3px 0;color:var(--text-secondary);font-size:0.82rem">${m}</td><td style="font-variant-numeric:tabular-nums;font-size:0.82rem"><strong>${fmtTok((mv.in||0)+(mv.out||0))}</strong></td></tr>`).join('');
 
-            // Yearly section
-            const yearTotCalls  = (yr_t.calls||0)  + (retro?.calls_year||0);
-            const yearTotTokIn  = (yr_t.input_tokens||0)  + (retro?.tok_in_year||0);
-            const yearTotTokOut = (yr_t.output_tokens||0) + (retro?.tok_out_year||0);
-            const yearTotCost   = (yr_t.cost_usd||0) + (retro?.cost_year||0);
-            const yearHtml = `
-                <div style="background:var(--bg-secondary);border-radius:10px;padding:12px;margin-bottom:12px">
-                    <div style="font-size:0.78rem;font-weight:600;color:var(--text-secondary);margin-bottom:8px;text-transform:uppercase;letter-spacing:.04em">${t('settings.info.year_section').replace('{year}', d.year)}</div>
+            const monthHtml = `
+                <div style="background:var(--bg-secondary);border-radius:10px;padding:12px;margin-bottom:10px">
+                    ${sectionHeader(monthLabel)}
                     <div style="display:flex;gap:8px;flex-wrap:wrap">
-                        ${pill('~'+yearTotCalls, t('settings.info.ai_calls'))}
-                        ${pill('~'+fmtTok(yearTotTokIn+yearTotTokOut), t('settings.info.total_tokens'))}
-                        ${pill('~'+toCurr(yearTotCost), t('settings.info.est_cost'), '#15803d')}
+                        ${pill(ms.calls || 0, t('settings.info.ai_calls'))}
+                        ${pill('~'+fmtTok(msIn+msOut), t('settings.info.total_tokens'))}
+                        ${pill('~'+toCurr(ms.cost_usd), t('settings.info.est_cost'), '#15803d')}
+                    </div>
+                    ${actionRows ? `<details style="margin-top:8px"><summary style="font-size:0.82rem;cursor:pointer;color:var(--text-secondary)">${t('settings.info.by_action')}</summary><table style="margin-top:6px;border-collapse:collapse">${actionRows}</table></details>` : ''}
+                    ${modelRows  ? `<details style="margin-top:4px"><summary style="font-size:0.82rem;cursor:pointer;color:var(--text-secondary)">${t('settings.info.by_model')}</summary><table style="margin-top:6px;border-collapse:collapse">${modelRows}</table></details>` : ''}
+                </div>`;
+
+            // Year section
+            const yearHtml = `
+                <div style="background:var(--bg-secondary);border-radius:10px;padding:12px;margin-bottom:10px">
+                    ${sectionHeader(t('settings.info.year_label').replace('{year}', d.year))}
+                    <div style="display:flex;gap:8px;flex-wrap:wrap">
+                        ${pill('~'+(ys.calls || 0), t('settings.info.ai_calls'))}
+                        ${pill('~'+fmtTok(ysIn+ysOut), t('settings.info.total_tokens'))}
+                        ${pill('~'+toCurr(ys.cost_usd), t('settings.info.est_cost'), '#15803d')}
                     </div>
                 </div>`;
 
-            aiEl.innerHTML = trackedHtml + retroHtml + yearHtml
+            aiEl.innerHTML = monthHtml + yearHtml
                 + `<p class="settings-hint" style="margin-top:4px">${t('settings.info.pricing_note')}</p>`;
         }
 
@@ -2323,14 +2316,12 @@ async function _renderInfoTab() {
         const invEl = document.getElementById('info-inv-content');
         if (invEl && d.db) {
             const db = d.db;
-            const expColor   = db.expired > 0 ? '#dc2626' : '';
-            const soonColor  = db.expiring_soon > 0 ? '#d97706' : '';
             invEl.innerHTML = `
                 <div style="display:flex;gap:8px;flex-wrap:wrap">
                     ${pill(db.inventory_active, t('settings.info.inv_active'))}
                     ${pill(db.products_total,   t('settings.info.inv_products'))}
-                    ${pill(db.expiring_soon,     t('settings.info.inv_expiring'), soonColor)}
-                    ${pill(db.expired,           t('settings.info.inv_expired'),  expColor)}
+                    ${pill(db.expiring_soon,     t('settings.info.inv_expiring'), db.expiring_soon > 0 ? '#d97706' : '')}
+                    ${pill(db.expired,           t('settings.info.inv_expired'),  db.expired > 0 ? '#dc2626' : '')}
                     ${pill(db.finished,          t('settings.info.inv_finished'))}
                 </div>`;
         }
@@ -2341,11 +2332,11 @@ async function _renderInfoTab() {
             const db = d.db;
             actEl.innerHTML = `
                 <div style="display:flex;gap:8px;flex-wrap:wrap">
-                    ${pill(db.tx_month,        t('settings.info.act_tx_month'))}
-                    ${pill(db.restock_month,   t('settings.info.act_restock'))}
-                    ${pill(db.use_month,       t('settings.info.act_use'))}
-                    ${pill(db.products_month,  t('settings.info.act_new_products'))}
-                    ${pill(db.tx_year,         t('settings.info.act_tx_year'))}
+                    ${pill(db.tx_month,       t('settings.info.act_tx_month'))}
+                    ${pill(db.restock_month,  t('settings.info.act_restock'))}
+                    ${pill(db.use_month,      t('settings.info.act_use'))}
+                    ${pill(db.products_month, t('settings.info.act_new_products'))}
+                    ${pill(db.tx_year,        t('settings.info.act_tx_year'))}
                 </div>`;
         }
 
@@ -2353,18 +2344,17 @@ async function _renderInfoTab() {
         if (sysEl) {
             const db = d.db || {};
             const nowTs = Math.floor(Date.now()/1000);
-            const bringDays = d.bring_expires_ts ? Math.round((d.bring_expires_ts - nowTs)/86400) : null;
+            const bringDays  = d.bring_expires_ts ? Math.round((d.bring_expires_ts - nowTs)/86400) : null;
             const bringColor = bringDays !== null && bringDays <= 3 ? '#dc2626' : '';
             const bringLabel = bringDays === null ? '—'
                 : bringDays <= 0 ? t('settings.info.bring_expired')
                 : t('settings.info.bring_days').replace('{n}', bringDays);
-
             const lvlColors = {DEBUG:'#1e40af//#dbeafe', INFO:'#15803d//#dcfce7', WARN:'#854d0e//#fef9c3', ERROR:'#991b1b//#fee2e2'};
             const [lvlFg, lvlBg] = (lvlColors[d.log_level] || '#64748b//#f1f5f9').split('//');
 
             sysEl.innerHTML = `
                 <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
-                    ${pill(fmtBytes(db.bytes),  t('settings.info.db_size'))}
+                    ${pill(fmtBytes(db.bytes),    t('settings.info.db_size'))}
                     ${pill(fmtBytes(d.log_bytes), t('settings.info.log_size'))}
                     ${pill(`<span style="background:${lvlBg};color:${lvlFg};padding:2px 6px;border-radius:5px;font-size:0.78rem">${d.log_level||'INFO'}</span>`, t('settings.info.log_level'))}
                 </div>
@@ -2390,6 +2380,7 @@ async function _renderInfoTab() {
         });
     }
 }
+
 
 /**
  * Populate the About section with the current app version from the server.
