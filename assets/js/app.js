@@ -7123,17 +7123,19 @@ function showProductAction() {
         conservationHtml = `<div class="product-conservation">🧊 ${escapeHtml(currentProduct.conservation)}</div>`;
     }
     
-    // LARGER product preview
+    // Hero card preview (matches page-use style)
     document.getElementById('action-product-preview').innerHTML = `
         ${currentProduct.image_url ?
             `<img src="${escapeHtml(currentProduct.image_url)}" alt="">` :
-            `<span class="product-preview-emoji">${catIcon}</span>`
+            `<span class="use-hero-icon">${catIcon}</span>`
         }
-        <div class="product-preview-info">
-            <h3>${escapeHtml(currentProduct.name)}</h3>
-            <p>${currentProduct.brand ? `<strong>${escapeHtml(currentProduct.brand)}</strong>` : ''}</p>
-            ${currentProduct.weight_info ? `<p style="font-size:0.85rem;color:var(--text-light)">⚖️ ${escapeHtml(currentProduct.weight_info)}</p>` : ''}
-            ${currentProduct.barcode ? `<p style="font-size:0.75rem;color:var(--text-muted)">📊 ${currentProduct.barcode}</p>` : ''}
+        <div class="use-hero-body">
+            <div class="use-hero-name">${escapeHtml(currentProduct.name)}</div>
+            ${currentProduct.brand ? `<div class="use-hero-brand">${escapeHtml(currentProduct.brand)}</div>` : ''}
+            <div class="use-hero-meta">
+                ${currentProduct.weight_info ? `<span class="use-meta-pill use-pill-qty">⚖️ ${escapeHtml(currentProduct.weight_info)}</span>` : ''}
+                ${currentProduct.barcode ? `<span class="use-meta-pill action-pill-barcode">📊 ${currentProduct.barcode}</span>` : ''}
+            </div>
         </div>
         <button type="button" class="btn-edit-inline" onclick="toggleActionEdit()" title="${t('product.edit_name_brand')}">✏️</button>
     `;
