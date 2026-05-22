@@ -3027,13 +3027,23 @@ body.server-offline .bottom-nav {
     gap: 14px;
 }
 
-/* Use-page hero card: larger, accent border, more breathing room */
+/* Action and Use page hero card */
+#page-action .product-preview-small,
 #page-use .product-preview-small {
     padding: 14px 16px;
     gap: 14px;
     border-left: 4px solid var(--primary);
     align-items: flex-start;
+    position: relative;
 }
+
+/* action page: slightly larger name */
+#page-action .use-hero-name {
+    font-size: 1.15rem;
+}
+
+/* barcode pill on action page */
+.action-pill-barcode { background: #f1f5f9; color: #64748b; }
 
 .use-hero-icon {
     font-size: 2.4rem;
@@ -7575,7 +7585,9 @@ body.cooking-mode-active .app-header {
 /* ── Use inventory info ── */
 [data-theme="dark"] .use-inventory-info { background: #0c2a4e; color: #7dd3fc; }
 [data-theme="dark"] #use-expiry-hint    { background: #2a1e00; border-color: #78350f; color: #fde68a; }
-[data-theme="dark"] #page-use .product-preview-small { border-left-color: var(--primary); }
+[data-theme="dark"] #page-use .product-preview-small  { border-left-color: var(--primary); }
+[data-theme="dark"] #page-action .product-preview-small { border-left-color: var(--primary); }
+[data-theme="dark"] .action-pill-barcode { background: #1e293b; color: #94a3b8; }
 [data-theme="dark"] .use-pill-ok       { background: #14532d; color: #86efac; }
 [data-theme="dark"] .use-pill-warn     { background: #422006; color: #fde68a; }
 [data-theme="dark"] .use-pill-soon     { background: #431407; color: #fdba74; }
