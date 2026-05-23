@@ -111,6 +111,7 @@ jobs:
 
       - name: Merge develop → main
         run: |
+          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
           LAST=$(git log --oneline -1 origin/develop)
           git checkout main
           git pull --ff-only origin main
