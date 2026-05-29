@@ -223,7 +223,8 @@
     "status_parallel": "Using combined scan methods...",
     "ai_fallback_searching": "AI identifying product...",
     "ai_fallback_found": "Product identified by AI",
-    "ai_fallback_not_found": "AI: product not recognized"
+    "ai_fallback_not_found": "AI: product not recognized",
+    "ai_fallback_exhausted": "AI: product not recognized — try scanning the barcode"
   },
   "action": {
     "title": "What do you want to do?",

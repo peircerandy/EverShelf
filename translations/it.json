@@ -223,7 +223,8 @@
     "status_parallel": "Doppia scansione attiva...",
     "ai_fallback_searching": "Identificazione AI in corso...",
     "ai_fallback_found": "Prodotto identificato dall'AI",
-    "ai_fallback_not_found": "AI: prodotto non riconosciuto"
+    "ai_fallback_not_found": "AI: prodotto non riconosciuto",
+    "ai_fallback_exhausted": "AI: prodotto non riconosciuto — riprova con il barcode"
   },
   "action": {
     "title": "Cosa vuoi fare?",

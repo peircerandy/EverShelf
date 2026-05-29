@@ -1944,6 +1944,7 @@ let aiStream = null;
 let _scanZoomLevel = 2; // always 2x
 let _torchActive = false;
 let _aiFallbackTimer = null;
+let _aiFallbackExhausted = false; // true after one failed AI visual attempt — reset when scanner is closed
 
 // Apply fixed 2x zoom (hardware if available, CSS fallback)
 async function _applyFixedZoom() {
@@ -2174,17 +2175,19 @@ async function _tryGeminiVisualBarcode() {
                 showToast(t('error.connection'), 'error');
             }
         } else {
-            scanLog('AI visual: product not identified');
+            scanLog('AI visual: product not identified — exhausted for this session');
+            _aiFallbackExhausted = true;
             showLoading(false);
-            showToast(t('scan.ai_fallback_not_found'), 'warning');
-            _setScanStatus(t('scan.status_ready'), '', '');
-            // Restart scanner so user can try again
+            _setScanStatus(t('scan.ai_fallback_exhausted'), 'retry', '');
+            // Restart the scanner so the user can keep trying with the barcode reader,
+            // but the 5s AI timer will NOT fire again (_aiFallbackExhausted=true).
             setTimeout(() => initScanner(), 300);
         }
     } catch (e) {
         scanLog(`AI visual error: ${e.message}`);
+        _aiFallbackExhausted = true;
         showLoading(false);
-        showToast(t('error.connection'), 'error');
+        _setScanStatus(t('scan.ai_fallback_exhausted'), 'retry', '');
         setTimeout(() => initScanner(), 300);
     } finally {
         _aiBarcodeVisualRunning = false;
@@ -6615,10 +6618,10 @@ async function initScanner() {
         }
 
         // After 5s without a scan, auto-trigger AI visual identification (if enabled)
-        if (_geminiAvailable && getSettings().barcode_ai_fallback) {
+        if (_geminiAvailable && getSettings().barcode_ai_fallback && !_aiFallbackExhausted) {
             clearTimeout(_aiFallbackTimer);
             _aiFallbackTimer = setTimeout(() => {
-                if (scannerStream) { // still scanning — no barcode found yet
+                if (scannerStream && !_aiFallbackExhausted) { // still scanning — no barcode found yet
                     scanLog('5s elapsed without barcode — triggering AI visual fallback');
                     _tryGeminiVisualBarcode();
                 }
@@ -6948,6 +6951,7 @@ function stopScanner() {
     _scanZoomLevel = 2; // always 2x on next start
     _torchActive = false;
     clearTimeout(_aiFallbackTimer); _aiFallbackTimer = null;
+    _aiFallbackExhausted = false; // reset so a new scanner session can try again
     if (scannerStream) {
         scannerStream.getTracks().forEach(t => t.stop());
         scannerStream = null;

@@ -220,7 +220,8 @@
     "status_parallel": "Escaneo combinado activo...",
     "ai_fallback_searching": "Identificación de IA en curso...",
     "ai_fallback_found": "Producto identificado por IA",
-    "ai_fallback_not_found": "IA: producto no reconocido"
+    "ai_fallback_not_found": "IA: producto no reconocido",
+    "ai_fallback_exhausted": "IA: producto no reconocido — prueba a escanear el código"
   },
   "action": {
     "title": "¿Qué quieres hacer?",
