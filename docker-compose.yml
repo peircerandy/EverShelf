@@ -3,7 +3,7 @@ services:
     build: .
     container_name: evershelf
     ports:
-      - "8000:443"
+      - "8000:80"
     volumes:
       # Persist database and runtime data
       - evershelf_data:/var/www/html/data
