@@ -15,8 +15,8 @@ services:
       - APP_ENV=production
       - DB_CONNECTION=sqlite
       - APP_KEY=base64:KeepItSecretKeepItSafe=
-      - APP_URL=https://homeassistant.local:8000
-      - FORCE_HTTPS=true
+      - FORCE_HTTPS=false
+
 
 
 volumes:
