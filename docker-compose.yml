@@ -12,10 +12,8 @@ services:
     restart: unless-stopped
     environment:
       - TZ=America/New_York
-      - APP_ENV=production
-      - DB_CONNECTION=sqlite
-      - APP_KEY=base64:KeepItSecretKeepItSafe=
-      - FORCE_HTTPS=false
+      - APP_ENV=local
+      - DEVELOPMENT=true
 
 
 
