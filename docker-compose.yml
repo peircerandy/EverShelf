@@ -5,10 +5,10 @@ services:
     ports:
       - "8000:443"
     volumes:
-      # Persist database and runtime data
-      - evershelf_data:/var/www/html/data
       # Mount your local .env configuration
       - ./.env:/var/www/html/stack.env
+      # Persist database and runtime data
+      - evershelf_data:/var/www/html/data
     restart: unless-stopped
     environment:
       - TZ=America/New_York
