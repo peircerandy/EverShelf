@@ -3,12 +3,12 @@ services:
     build: .
     container_name: evershelf
     ports:
-      - "8000:80"
+      - "8000:80/tcp"
     volumes:
       # Persist database and runtime data
       - evershelf_data:/var/www/html/data
       # Mount your local .env configuration
-      # - ./.env:/var/www/html/stack.env
+      # - ./.env:/var/www/html/.env:ro
     restart: unless-stopped
     environment:
       - TZ=America/New_York
