@@ -10,7 +10,7 @@ services:
       - evershelf_data:/var/www/html/data
       # Mount your local .env configuration
       # - ./.env:/var/www/html/.env:ro
-      - stack.env:/var/www/html/.env
+      - ./stack.env:/var/www/html/.env
     restart: unless-stopped
     environment:
       - TZ=America/New_York
