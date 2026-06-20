@@ -5,8 +5,7 @@ services:
     ports:
       - "8000:80/tcp"
     env_file: stack.env
-    entrypoint: >
-      sh -c "cp /stack.env /var/www/html/.env && exec docker-php-entrypoint apache2-foreground"
+    command: sh -c "cp /stack.env /var/www/html/.env && apache2-foreground"
     volumes:
       # Persist database and runtime data
       - evershelf_data:/var/www/html/data
