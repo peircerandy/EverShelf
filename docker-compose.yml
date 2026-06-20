@@ -5,12 +5,14 @@ services:
     ports:
       - "8000:80/tcp"
     env_file: stack.env
+    environment:
+      # Tell Laravel to change its default .env file scanning location!
+      - APP_CONFIG_FILE=/var/www/html/data/.env
     volumes:
       # Persist database and runtime data
       - evershelf_data:/var/www/html/data
       # Mount your local .env configuration
       # - ./.env:/var/www/html/.env:ro
-      - ./stack.env:/var/www/html/.env
     restart: unless-stopped
     environment:
       - TZ=America/New_York
