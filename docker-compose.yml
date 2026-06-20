@@ -4,8 +4,11 @@ services:
     container_name: evershelf
     ports:
       - "8000:80/tcp"
-    env_file: stack.env
-    command: sh -c "cp /stack.env /var/www/html/.env && apache2-foreground"
+    # env_file: stack.env
+    # command: sh -c "cp /stack.env /var/www/html/.env && apache2-foreground"
+    configs:
+      - source: evershelf_env
+        target: /var/www/html/.env
     volumes:
       # Persist database and runtime data
       - evershelf_data:/var/www/html/data
