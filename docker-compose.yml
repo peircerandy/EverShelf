@@ -10,12 +10,16 @@ services:
       - evershelf_data:/var/www/html/data
       # Mount your local .env configuration
       # - ./.env:/var/www/html/.env:ro
+    command: >
+      sh -c "printenv > /var/www/html/data/.env && 
+             ln -sf /var/www/html/data/.env /var/www/html/.env && 
+             exec apache2-foreground"
     restart: unless-stopped
     environment:
       - TZ=America/New_York
       - APP_ENV=local
       - DEVELOPMENT=true
-      - APP_CONFIG_FILE=/var/www/html/data/.env
+      # - APP_CONFIG_FILE=/var/www/html/data/.env
 
 
 
